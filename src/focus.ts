@@ -25,6 +25,16 @@ export function focusSession(sessionId: string): void {
     return;
   }
 
+  if (terminal.includes('vscode') || terminal.includes('visual studio code')) {
+    focusVSCode();
+    return;
+  }
+
+  if (terminal.includes('cursor')) {
+    focusCursor();
+    return;
+  }
+
   if (focusTerminalByTty(session.terminalTty) || focusTerminalByWindowId(session.terminalWindowId)) {
     return;
   }
@@ -38,6 +48,27 @@ function focusTerminal(): void {
 function focusITerm(): void {
   if (!runAppleScript('tell application "iTerm2" to activate')) {
     runAppleScript('tell application "iTerm" to activate');
+  }
+}
+
+function focusVSCode(): void {
+  if (!activateBundle('com.microsoft.VSCode')) {
+    runAppleScript('tell application "Visual Studio Code" to activate');
+  }
+}
+
+function focusCursor(): void {
+  if (!activateBundle('com.todesktop.230313mzl4w4u92')) {
+    runAppleScript('tell application "Cursor" to activate');
+  }
+}
+
+function activateBundle(bundleId: string): boolean {
+  try {
+    execFileSync('open', ['-b', bundleId], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
   }
 }
 

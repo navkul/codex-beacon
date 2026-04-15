@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { SessionRecord } from './types.js';
 
@@ -12,7 +13,7 @@ function truncate(text: string, limit: number): string {
 export function sendSessionNotification(session: SessionRecord): void {
   const config = loadConfig();
   const message = truncate(session.lastSummary ?? 'Codex is ready for your next prompt.', config.maxNotificationChars);
-  const execute = `codex-beacon focus --session-id ${shellEscape(session.sessionId)}`;
+  const execute = focusCommand(session.sessionId);
   const args = [
     '-title',
     session.displayName,
@@ -23,10 +24,6 @@ export function sendSessionNotification(session: SessionRecord): void {
     '-execute',
     execute
   ];
-  const bundleId = activationBundleId(session.terminalApp);
-  if (bundleId) {
-    args.push('-activate', bundleId);
-  }
   if (config.notificationSound) {
     args.push('-sound', config.notificationSound);
   }
@@ -45,13 +42,13 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function activationBundleId(terminalApp?: string): string | undefined {
-  const normalized = (terminalApp ?? '').toLowerCase();
-  if (normalized.includes('iterm')) {
-    return 'com.googlecode.iterm2';
-  }
-  if (normalized.includes('terminal')) {
-    return 'com.apple.Terminal';
-  }
-  return undefined;
+function focusCommand(sessionId: string): string {
+  const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+  return [
+    shellEscape(process.execPath),
+    shellEscape(cliPath),
+    'focus',
+    '--session-id',
+    shellEscape(sessionId)
+  ].join(' ');
 }

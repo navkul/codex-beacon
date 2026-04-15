@@ -86,4 +86,6 @@ This repository contains a real scaffold for:
 
 The session-summary extraction is intentionally conservative for the MVP. It reads the transcript tail when available and falls back to a generic ready/stopped message when structured parsing is insufficient.
 
-The current focus path is best effort: it tries to match the original Terminal.app or iTerm2 session by TTY, then by recorded window id, then falls back to activating the terminal app.
+The current focus path is best effort: it tries to match the original Terminal.app or iTerm2 session by TTY, then by recorded window id, then falls back to activating the terminal app. VS Code and Cursor integrated terminals currently get app-level focus only.
+
+`terminal-notifier` is the temporary MVP notification transport. It keeps the first slice small, but a native macOS helper is the likely direction if Beacon needs first-party notification identity, better click reliability, or a richer companion UI.
