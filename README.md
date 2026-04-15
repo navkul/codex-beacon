@@ -40,11 +40,13 @@ A future native Swift helper remains a good optimization if the click-to-focus b
 
 ### Main user path
 
-1. `brew install terminal-notifier`
-2. `npm install`
-3. `npm run build`
-4. `npm link`
-5. `codex-beacon install --shell zsh`
+1. Install Node.js 18 or newer.
+2. `brew install terminal-notifier`
+3. `npm install`
+4. `npm run build`
+5. `npm link`
+6. `codex-beacon install --shell zsh`
+7. Add the printed snippet to your shell rc file and reload the shell.
 
 ### Other users later
 
@@ -58,6 +60,8 @@ After install, the user should still type `codex`.
 The shell wrapper will:
 
 - intercept optional session naming flags like `--session-name` or `-N`
+- preserve the real Codex binary path in `CODEX_BEACON_CODEX_BIN`
+- capture terminal app, TTY, and best-effort window metadata
 - register the launch with Codex Beacon
 - exec the real Codex binary
 
@@ -81,3 +85,5 @@ This repository contains a real scaffold for:
 - markdown operating docs tailored for Codex
 
 The session-summary extraction is intentionally conservative for the MVP. It reads the transcript tail when available and falls back to a generic ready/stopped message when structured parsing is insufficient.
+
+The current focus path is best effort: it tries to match the original Terminal.app or iTerm2 session by TTY, then by recorded window id, then falls back to activating the terminal app.

@@ -61,8 +61,8 @@ program
   .command('install')
   .description('Print shell integration instructions')
   .option('--shell <shell>', 'shell type', 'zsh')
-  .action((options: { shell: 'zsh' | 'bash' }) => {
-    process.stdout.write(`${installMessage(options.shell)}\n`);
+  .action((options: { shell: string }) => {
+    process.stdout.write(`${installMessage(parseShell(options.shell))}\n`);
   });
 
 program
@@ -79,3 +79,10 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   process.stderr.write(`${message}\n`);
   process.exit(1);
 });
+
+function parseShell(shell: string): 'zsh' | 'bash' {
+  if (shell === 'zsh' || shell === 'bash') {
+    return shell;
+  }
+  throw new Error(`Unsupported shell: ${shell}`);
+}

@@ -6,6 +6,7 @@ export interface SessionRecord {
   cwd: string;
   terminalApp?: string;
   terminalWindowId?: string;
+  terminalTty?: string;
   transcriptPath?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -34,10 +35,13 @@ export interface DaemonEvent {
   displayName?: string;
   terminalApp?: string;
   terminalWindowId?: string;
+  terminalTty?: string;
   timestamp: string;
 }
 
 export interface AppConfig {
   maxNotificationChars: number;
   notifierCommand: string;
+  notificationSound: string | null;
+  appIcon: string | null;
 }
