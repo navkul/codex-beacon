@@ -1,0 +1,46 @@
+{
+  "name": "codex-beacon",
+  "version": "0.1.0",
+  "description": "Low-latency macOS notifications and session tracking for Codex interactive sessions.",
+  "type": "module",
+  "bin": {
+    "codex-beacon": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "FINDINGS.md",
+    "PROGRESS.md",
+    "PROMPT.md",
+    "FEATURES.md",
+    ".codex/hooks.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "codex",
+    "macos",
+    "notifications",
+    "terminal",
+    "hooks"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
