@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-beacon hook session-start",
+            "statusMessage": "Codex Beacon registering session"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-beacon hook user-prompt-submit",
+            "statusMessage": "Codex Beacon clearing delivered notifications"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codex-beacon hook stop",
+            "timeout": 5,
+            "statusMessage": "Codex Beacon queueing session notification"
+          }
+        ]
+      }
+    ]
+  }
+}

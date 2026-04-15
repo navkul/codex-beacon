@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.codex-beacon/
+.DS_Store
+*.log
