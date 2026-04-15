@@ -13,7 +13,7 @@ export function sendSessionNotification(session: SessionRecord): void {
   const config = loadConfig();
   const message = truncate(session.lastSummary ?? 'Codex is ready for your next prompt.', config.maxNotificationChars);
   const execute = `codex-beacon focus --session-id ${shellEscape(session.sessionId)}`;
-  spawnSync(config.notifierCommand, [
+  const args = [
     '-title',
     session.displayName,
     '-message',
@@ -21,10 +21,19 @@ export function sendSessionNotification(session: SessionRecord): void {
     '-group',
     session.sessionId,
     '-execute',
-    execute,
-    '-activate',
-    'com.apple.Terminal'
-  ]);
+    execute
+  ];
+  const bundleId = activationBundleId(session.terminalApp);
+  if (bundleId) {
+    args.push('-activate', bundleId);
+  }
+  if (config.notificationSound) {
+    args.push('-sound', config.notificationSound);
+  }
+  if (config.appIcon) {
+    args.push('-appIcon', config.appIcon);
+  }
+  spawnSync(config.notifierCommand, args);
 }
 
 export function clearSessionNotification(sessionId: string): void {
@@ -34,4 +43,15 @@ export function clearSessionNotification(sessionId: string): void {
 
 function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function activationBundleId(terminalApp?: string): string | undefined {
+  const normalized = (terminalApp ?? '').toLowerCase();
+  if (normalized.includes('iterm')) {
+    return 'com.googlecode.iterm2';
+  }
+  if (normalized.includes('terminal')) {
+    return 'com.apple.Terminal';
+  }
+  return undefined;
 }

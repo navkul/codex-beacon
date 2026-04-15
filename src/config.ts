@@ -5,7 +5,9 @@ import { AppConfig } from './types.js';
 
 const DEFAULT_CONFIG: AppConfig = {
   maxNotificationChars: 180,
-  notifierCommand: 'terminal-notifier'
+  notifierCommand: 'terminal-notifier',
+  notificationSound: null,
+  appIcon: null
 };
 
 export function appRoot(): string {

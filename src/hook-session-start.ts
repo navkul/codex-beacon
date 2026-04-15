@@ -11,6 +11,8 @@ export async function runSessionStartHook(): Promise<void> {
     transcriptPath: payload.transcript_path,
     displayName: process.env.CODEX_BEACON_SESSION_NAME || undefined,
     terminalApp: process.env.CODEX_BEACON_TERMINAL_APP || undefined,
+    terminalWindowId: process.env.CODEX_BEACON_TERMINAL_WINDOW_ID || undefined,
+    terminalTty: process.env.CODEX_BEACON_TERMINAL_TTY || undefined,
     timestamp: new Date().toISOString()
   });
 }

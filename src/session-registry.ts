@@ -27,16 +27,24 @@ export function saveRegistry(registry: RegistryFile): void {
   writeFileSync(registryPath(), JSON.stringify(registry, null, 2));
 }
 
-export function allocateDisplayName(registry: RegistryFile, preferred?: string): string {
-  if (preferred && preferred.trim()) {
-    return preferred.trim();
+export function allocateDisplayName(registry: RegistryFile, preferred?: string, sessionId?: string): string {
+  const requested = preferred?.trim();
+  if (requested) {
+    if (!displayNameInUse(registry, requested, sessionId)) {
+      return requested;
+    }
+
+    let suffix = 2;
+    while (displayNameInUse(registry, `${requested} ${suffix}`, sessionId)) {
+      suffix += 1;
+    }
+    return `${requested} ${suffix}`;
   }
 
   while (true) {
     const candidate = `codex ${registry.nextDefaultName}`;
     registry.nextDefaultName += 1;
-    const inUse = Object.values(registry.sessions).some((session) => session.displayName === candidate);
-    if (!inUse) {
+    if (!displayNameInUse(registry, candidate, sessionId)) {
       return candidate;
     }
   }
@@ -48,15 +56,16 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
   const createdAt = existing?.createdAt ?? event.timestamp ?? nowIso();
   const session: SessionRecord = {
     sessionId: event.sessionId,
-    displayName: event.displayName ?? existing?.displayName ?? allocateDisplayName(registry),
+    displayName: existing?.displayName ?? allocateDisplayName(registry, event.displayName, event.sessionId),
     cwd: event.cwd ?? existing?.cwd ?? process.cwd(),
     terminalApp: event.terminalApp ?? existing?.terminalApp,
     terminalWindowId: event.terminalWindowId ?? existing?.terminalWindowId,
+    terminalTty: event.terminalTty ?? existing?.terminalTty,
     transcriptPath: event.transcriptPath ?? existing?.transcriptPath,
     createdAt,
     updatedAt: event.timestamp ?? nowIso(),
     lastSummary: existing?.lastSummary,
-    status: event.type === 'session-active' ? 'active' : 'waiting'
+    status: event.type === 'session-stop' ? 'waiting' : 'active'
   };
   registry.sessions[event.sessionId] = session;
   saveRegistry(registry);
@@ -81,4 +90,10 @@ export function getSession(sessionId: string): SessionRecord | undefined {
 
 export function listSessions(): SessionRecord[] {
   return Object.values(loadRegistry().sessions).sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+function displayNameInUse(registry: RegistryFile, displayName: string, sessionId?: string): boolean {
+  return Object.values(registry.sessions).some((session) => {
+    return session.sessionId !== sessionId && session.displayName === displayName;
+  });
 }
