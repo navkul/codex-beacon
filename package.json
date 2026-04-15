@@ -1,7 +1,7 @@
 {
   "name": "codex-beacon",
   "version": "0.1.0",
-  "description": "Low-latency macOS notifications and session tracking for Codex interactive sessions.",
+  "description": "Low-latency macOS menu-bar overlay and session tracking for Codex interactive sessions.",
   "type": "module",
   "bin": {
     "codex-beacon": "./dist/cli.js"
@@ -18,7 +18,7 @@
     ".codex/hooks.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-overlay.mjs",
     "clean": "rm -rf dist",
     "check": "tsc --noEmit -p tsconfig.json",
     "dev": "tsx src/cli.ts",
@@ -27,7 +27,7 @@
   "keywords": [
     "codex",
     "macos",
-    "notifications",
+    "overlay",
     "terminal",
     "hooks"
   ],

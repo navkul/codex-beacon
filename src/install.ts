@@ -19,7 +19,7 @@ export function installMessage(shell: 'zsh' | 'bash'): string {
     '',
     'Install runtime dependencies:',
     '- Node.js 18 or newer',
-    '- terminal-notifier, for example: brew install terminal-notifier',
+    '- Xcode Command Line Tools, so swiftc can build the overlay helper',
     '',
     'Also ensure ~/.codex/config.toml has:',
     '[features]',

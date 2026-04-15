@@ -41,7 +41,5 @@ export interface DaemonEvent {
 
 export interface AppConfig {
   maxNotificationChars: number;
-  notifierCommand: string;
-  notificationSound: string | null;
-  appIcon: string | null;
+  overlayCommand: string | null;
 }
