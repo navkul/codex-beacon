@@ -64,6 +64,7 @@ The shell wrapper will:
 - intercept optional session naming flags like `--session-name` or `-N`
 - preserve the real Codex binary path in `CODEX_BEACON_CODEX_BIN`
 - capture terminal app, TTY, and best-effort window metadata
+- capture iTerm tab index and session unique id when available
 - register the launch with Codex Beacon
 - exec the real Codex binary
 
@@ -89,6 +90,25 @@ This repository contains a real scaffold for:
 
 The session-summary extraction is intentionally conservative for the MVP. It reads the transcript tail when available and falls back to a generic ready/stopped message when structured parsing is insufficient.
 
-The current focus path is best effort: it tries to match the original Terminal.app or iTerm2 session by TTY, then by recorded window id, then falls back to activating the terminal app. VS Code and Cursor integrated terminals currently get app-level focus only.
+The current summary path is local and deterministic:
+
+- parse assistant text from the Codex JSONL transcript tail
+- skip generic fragments such as `Done.`
+- classify the turn as `done`, `blocked`, `failed`, `needs-input`, or `ready`
+- prefer a stronger sentence or bullet
+- apply configured whole-word limits
+
+You can inspect or tune the main overlay settings with:
+
+```bash
+codex-beacon config show
+codex-beacon config set overlayWidth 420
+codex-beacon config set overlayShowSummary false
+codex-beacon config set overlaySummaryStyle raw
+codex-beacon config set overlaySummaryMaxWords 18
+codex-beacon config set overlaySummaryMaxChars 140
+```
+
+The current focus path is best effort: it tries to match Terminal.app by tty and window id, and iTerm2 by session unique id, tty, window plus tab, and window id before falling back to app activation. VS Code and Cursor integrated terminals currently get app-level focus only.
 
 The active UI direction is a custom local menu-bar and overlay helper built from [macos/CodexBeaconOverlay.swift](/Users/arnavkulkarni/Developer/codex-beacon/macos/CodexBeaconOverlay.swift). It is intended for clone-plus-link use first; Mac App Store packaging is not required for the current workflow.

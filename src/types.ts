@@ -1,4 +1,6 @@
 export type SessionStatus = 'active' | 'waiting';
+export type SummaryState = 'ready' | 'done' | 'blocked' | 'failed' | 'needs-input';
+export type SummaryStyle = 'smart' | 'raw';
 
 export interface SessionRecord {
   sessionId: string;
@@ -6,11 +8,14 @@ export interface SessionRecord {
   cwd: string;
   terminalApp?: string;
   terminalWindowId?: string;
+  terminalTabIndex?: number;
+  terminalSessionUniqueId?: string;
   terminalTty?: string;
   transcriptPath?: string | null;
   createdAt: string;
   updatedAt: string;
   lastSummary?: string;
+  lastSummaryState?: SummaryState;
   status: SessionStatus;
 }
 
@@ -35,11 +40,24 @@ export interface DaemonEvent {
   displayName?: string;
   terminalApp?: string;
   terminalWindowId?: string;
+  terminalTabIndex?: number;
+  terminalSessionUniqueId?: string;
   terminalTty?: string;
   timestamp: string;
 }
 
 export interface AppConfig {
-  maxNotificationChars: number;
   overlayCommand: string | null;
+  overlayWidth: number;
+  overlayMaxVisibleRows: number;
+  overlayShowSummary: boolean;
+  overlaySummaryStyle: SummaryStyle;
+  overlaySummaryMaxChars: number;
+  overlaySummaryMaxWords: number;
+  overlaySummaryMaxLines: number;
+}
+
+export interface SummaryResult {
+  text: string;
+  state: SummaryState;
 }

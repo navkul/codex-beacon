@@ -1,9 +1,24 @@
 import AppKit
 import Foundation
 
+enum SummaryState: String, Decodable {
+    case ready
+    case done
+    case blocked
+    case failed
+    case needsInput = "needs-input"
+}
+
 struct FocusCommand: Decodable {
     let executable: String
     let args: [String]
+}
+
+struct OverlayPresentation: Decodable {
+    let width: Double
+    let maxVisibleRows: Int
+    let summaryVisible: Bool
+    let summaryMaxLines: Int
 }
 
 struct OverlayEvent: Decodable {
@@ -11,14 +26,17 @@ struct OverlayEvent: Decodable {
     let sessionId: String
     let displayName: String?
     let summary: String?
+    let state: SummaryState?
     let timestamp: String?
     let focusCommand: FocusCommand?
+    let presentation: OverlayPresentation?
 }
 
 struct OverlayItem {
     let sessionId: String
     let displayName: String
     let summary: String
+    let state: SummaryState
     let timestamp: String
     let focusCommand: FocusCommand
 }
@@ -26,25 +44,30 @@ struct OverlayItem {
 final class OverlayApp: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let panel = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 420, height: 220),
+        contentRect: NSRect(x: 0, y: 0, width: 384, height: 160),
         styleMask: [.borderless, .nonactivatingPanel],
         backing: .buffered,
         defer: false
     )
-    private let contentView = NSView()
-    private let stackView = NSStackView()
+    private let backgroundView = NSVisualEffectView()
+    private let headerTitle = NSTextField(labelWithString: "Beacon")
+    private let headerSubtitle = NSTextField(labelWithString: "No waiting sessions")
+    private let contentStack = NSStackView()
     private var items: [String: OverlayItem] = [:]
+    private var presentation = OverlayPresentation(width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
     private let decoder = JSONDecoder()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         configureStatusItem()
         configurePanel()
+        refresh()
         readEventsFromStdin()
     }
 
     private func configureStatusItem() {
         statusItem.button?.title = "Beacon"
+        statusItem.button?.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggleOverlay)
     }
@@ -55,28 +78,55 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         panel.hasShadow = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
 
-        contentView.wantsLayer = true
-        contentView.layer?.cornerRadius = 12
-        contentView.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96).cgColor
-        contentView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
-        contentView.layer?.borderWidth = 1
+        backgroundView.material = .hudWindow
+        backgroundView.blendingMode = .behindWindow
+        backgroundView.state = .active
+        backgroundView.wantsLayer = true
+        backgroundView.layer?.cornerRadius = 22
+        backgroundView.layer?.masksToBounds = true
+        backgroundView.layer?.borderWidth = 1
+        backgroundView.layer?.borderColor = NSColor.white.withAlphaComponent(0.08).cgColor
+        backgroundView.translatesAutoresizingMaskIntoConstraints = false
 
-        stackView.orientation = .vertical
-        stackView.alignment = .leading
-        stackView.distribution = .fill
-        stackView.spacing = 10
-        stackView.translatesAutoresizingMaskIntoConstraints = false
+        headerTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        headerTitle.textColor = NSColor.labelColor.withAlphaComponent(0.94)
+        headerSubtitle.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        headerSubtitle.textColor = NSColor.secondaryLabelColor
 
-        contentView.addSubview(stackView)
+        let headerStack = NSStackView(views: [headerTitle, headerSubtitle])
+        headerStack.orientation = .vertical
+        headerStack.alignment = .leading
+        headerStack.spacing = 2
+        headerStack.translatesAutoresizingMaskIntoConstraints = false
+
+        contentStack.orientation = .vertical
+        contentStack.alignment = .leading
+        contentStack.spacing = 10
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+
+        backgroundView.addSubview(headerStack)
+        backgroundView.addSubview(contentStack)
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
-            stackView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
-            stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12)
+            headerStack.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 20),
+            headerStack.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -20),
+            headerStack.topAnchor.constraint(equalTo: backgroundView.topAnchor, constant: 16),
+            contentStack.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 16),
+            contentStack.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -16),
+            contentStack.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 14),
+            contentStack.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor, constant: -16)
         ])
 
-        panel.contentView = contentView
+        let root = NSView(frame: panel.frame)
+        root.addSubview(backgroundView)
+        NSLayoutConstraint.activate([
+            backgroundView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            backgroundView.topAnchor.constraint(equalTo: root.topAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+        ])
+        panel.contentView = root
     }
 
     private func readEventsFromStdin() {
@@ -86,8 +136,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                     continue
                 }
                 do {
-                    let event = try self?.decoder.decode(OverlayEvent.self, from: data)
-                    if let event {
+                    if let event = try self?.decoder.decode(OverlayEvent.self, from: data) {
                         DispatchQueue.main.async {
                             self?.handle(event)
                         }
@@ -96,6 +145,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                     continue
                 }
             }
+
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }
@@ -103,6 +153,10 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func handle(_ event: OverlayEvent) {
+        if let presentation = event.presentation {
+            self.presentation = presentation
+        }
+
         if event.type == "clear" {
             items.removeValue(forKey: event.sessionId)
             refresh()
@@ -116,7 +170,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         items[event.sessionId] = OverlayItem(
             sessionId: event.sessionId,
             displayName: event.displayName ?? "Codex",
-            summary: event.summary ?? "Codex is ready for your next prompt.",
+            summary: event.summary ?? "Ready for your next prompt.",
+            state: event.state ?? .ready,
             timestamp: event.timestamp ?? "",
             focusCommand: focusCommand
         )
@@ -125,84 +180,113 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func refresh() {
-        statusItem.button?.title = items.isEmpty ? "Beacon" : "Beacon \(items.count)"
+        updateStatusItem()
+        headerSubtitle.stringValue = items.isEmpty ? "No waiting sessions" : "\(items.count) waiting"
 
-        for child in stackView.arrangedSubviews {
-            stackView.removeArrangedSubview(child)
-            child.removeFromSuperview()
+        for subview in contentStack.arrangedSubviews {
+            contentStack.removeArrangedSubview(subview)
+            subview.removeFromSuperview()
         }
 
         if items.isEmpty {
-            stackView.addArrangedSubview(label("No waiting Codex sessions.", size: 13, color: .secondaryLabelColor))
             panel.orderOut(nil)
             return
         }
 
-        stackView.addArrangedSubview(label("Codex Beacon", size: 13, color: .secondaryLabelColor, weight: .semibold))
+        let visibleItems = items.values
+            .sorted(by: { $0.displayName < $1.displayName })
+            .prefix(max(1, presentation.maxVisibleRows))
 
-        for item in items.values.sorted(by: { $0.displayName < $1.displayName }) {
-            let row = makeRow(for: item)
-            stackView.addArrangedSubview(row)
+        for item in visibleItems {
+            contentStack.addArrangedSubview(makeRow(for: item))
         }
 
         layoutPanel()
     }
 
+    private func updateStatusItem() {
+        let title = items.isEmpty ? "Beacon" : "Beacon \(items.count)"
+        statusItem.button?.title = title
+    }
+
     private func makeRow(for item: OverlayItem) -> NSView {
-        let button = NSButton()
-        button.bezelStyle = .regularSquare
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 18
+        container.layer?.borderWidth = 1
+        container.layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        container.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.36).cgColor
+
+        let dot = NSView()
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 3.5
+        dot.layer?.backgroundColor = stateColor(item.state).cgColor
+
+        let title = label(item.displayName, size: 17, color: NSColor.labelColor.withAlphaComponent(0.96), weight: .semibold)
+        title.lineBreakMode = .byTruncatingTail
+
+        let summary = label(item.summary, size: 12, color: NSColor.secondaryLabelColor.withAlphaComponent(0.94), weight: .regular)
+        summary.lineBreakMode = .byWordWrapping
+        summary.maximumNumberOfLines = presentation.summaryMaxLines
+
+        let arrow = NSImageView(image: NSImage(
+            systemSymbolName: "arrow.up.forward.app",
+            accessibilityDescription: "Open session"
+        ) ?? NSImage())
+        arrow.translatesAutoresizingMaskIntoConstraints = false
+        arrow.contentTintColor = NSColor.tertiaryLabelColor.withAlphaComponent(0.92)
+        arrow.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+
+        let topRow = NSStackView(views: [dot, title, spacer(), arrow])
+        topRow.orientation = .horizontal
+        topRow.alignment = .centerY
+        topRow.spacing = 10
+        topRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let bodyStack = NSStackView()
+        bodyStack.orientation = .vertical
+        bodyStack.alignment = .leading
+        bodyStack.spacing = presentation.summaryVisible ? 7 : 0
+        bodyStack.translatesAutoresizingMaskIntoConstraints = false
+        bodyStack.addArrangedSubview(topRow)
+        if presentation.summaryVisible {
+            bodyStack.addArrangedSubview(summary)
+        }
+
+        let button = NSButton(title: "", target: self, action: #selector(openSession(_:)))
         button.isBordered = false
-        button.target = self
-        button.action = #selector(openSession(_:))
+        button.bezelStyle = .shadowlessSquare
         button.identifier = NSUserInterfaceItemIdentifier(item.sessionId)
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.contentTintColor = .labelColor
 
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.cornerRadius = 8
-        container.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        let title = label(item.displayName, size: 15, color: .labelColor, weight: .semibold)
-        let summary = label(item.summary, size: 13, color: .secondaryLabelColor)
-        summary.maximumNumberOfLines = 2
-
-        let rowStack = NSStackView(views: [title, summary])
-        rowStack.orientation = .vertical
-        rowStack.alignment = .leading
-        rowStack.spacing = 4
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
-
-        container.addSubview(rowStack)
+        container.addSubview(bodyStack)
         container.addSubview(button)
         NSLayoutConstraint.activate([
-            rowStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            rowStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            rowStack.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
-            rowStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -10),
+            container.widthAnchor.constraint(equalToConstant: CGFloat(presentation.width) - 32),
+            dot.widthAnchor.constraint(equalToConstant: 7),
+            dot.heightAnchor.constraint(equalToConstant: 7),
+            arrow.widthAnchor.constraint(equalToConstant: 14),
+            arrow.heightAnchor.constraint(equalToConstant: 14),
+            bodyStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            bodyStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            bodyStack.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+            bodyStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -14),
             button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             button.topAnchor.constraint(equalTo: container.topAnchor),
-            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            container.widthAnchor.constraint(equalToConstant: 392)
+            button.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
+
         return container
     }
 
-    private func label(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight = .regular) -> NSTextField {
-        let field = NSTextField(labelWithString: text)
-        field.font = NSFont.systemFont(ofSize: size, weight: weight)
-        field.textColor = color
-        field.lineBreakMode = .byTruncatingTail
-        field.translatesAutoresizingMaskIntoConstraints = false
-        return field
-    }
-
     private func layoutPanel() {
-        let rowHeight = CGFloat(max(1, items.count)) * 72
-        let height = min(420, max(120, rowHeight + 48))
-        let width: CGFloat = 420
+        let rowHeight: CGFloat = presentation.summaryVisible ? 92 : 60
+        let visibleRows = min(max(items.count, 1), max(presentation.maxVisibleRows, 1))
+        let height = 58 + (CGFloat(visibleRows) * rowHeight) + 24
+        let width = CGFloat(presentation.width)
         let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         panel.setFrame(
             NSRect(x: frame.maxX - width - 18, y: frame.maxY - height - 18, width: width, height: height),
@@ -234,8 +318,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return
         }
         launch(item.focusCommand)
-        items.removeValue(forKey: sessionId)
-        refresh()
+        panel.orderOut(nil)
     }
 
     private func launch(_ command: FocusCommand) {
@@ -243,6 +326,35 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         process.executableURL = URL(fileURLWithPath: command.executable)
         process.arguments = command.args
         try? process.run()
+    }
+
+    private func label(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight) -> NSTextField {
+        let field = NSTextField(labelWithString: text)
+        field.font = NSFont.systemFont(ofSize: size, weight: weight)
+        field.textColor = color
+        field.translatesAutoresizingMaskIntoConstraints = false
+        return field
+    }
+
+    private func spacer() -> NSView {
+        let view = NSView()
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return view
+    }
+
+    private func stateColor(_ state: SummaryState) -> NSColor {
+        switch state {
+        case .done:
+            return NSColor(calibratedRed: 0.45, green: 0.83, blue: 0.63, alpha: 0.95)
+        case .blocked:
+            return NSColor(calibratedRed: 0.95, green: 0.72, blue: 0.35, alpha: 0.95)
+        case .failed:
+            return NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.95)
+        case .needsInput:
+            return NSColor(calibratedRed: 0.53, green: 0.74, blue: 0.98, alpha: 0.95)
+        case .ready:
+            return NSColor(calibratedWhite: 0.72, alpha: 0.95)
+        }
     }
 }
 

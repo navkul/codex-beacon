@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadConfig } from './config.js';
-import { SessionRecord } from './types.js';
+import { SessionRecord, SummaryState } from './types.js';
 
 interface OverlayFocusCommand {
   executable: string;
@@ -15,8 +15,17 @@ interface OverlayEvent {
   sessionId: string;
   displayName?: string;
   summary?: string;
+  state?: SummaryState;
   timestamp: string;
   focusCommand?: OverlayFocusCommand;
+  presentation?: OverlayPresentation;
+}
+
+interface OverlayPresentation {
+  width: number;
+  maxVisibleRows: number;
+  summaryVisible: boolean;
+  summaryMaxLines: number;
 }
 
 let overlayProcess: ChildProcess | undefined;
@@ -30,14 +39,21 @@ function truncate(text: string, limit: number): string {
 
 export function sendSessionNotification(session: SessionRecord): void {
   const config = loadConfig();
-  const message = truncate(session.lastSummary ?? 'Codex is ready for your next prompt.', config.maxNotificationChars);
+  const message = truncate(session.lastSummary ?? 'Ready for your next prompt.', config.overlaySummaryMaxChars);
   sendOverlayEvent({
     type: 'show',
     sessionId: session.sessionId,
     displayName: session.displayName,
     summary: message,
+    state: session.lastSummaryState ?? 'ready',
     timestamp: new Date().toISOString(),
-    focusCommand: focusCommand(session.sessionId)
+    focusCommand: focusCommand(session.sessionId),
+    presentation: {
+      width: config.overlayWidth,
+      maxVisibleRows: config.overlayMaxVisibleRows,
+      summaryVisible: config.overlayShowSummary,
+      summaryMaxLines: config.overlaySummaryMaxLines
+    }
   });
 }
 

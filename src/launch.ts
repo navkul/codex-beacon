@@ -4,11 +4,17 @@ import { resolveCodexBinary } from './codex-path.js';
 const APPLESCRIPT_TIMEOUT_MS = 300;
 const TTY_TIMEOUT_MS = 100;
 
+interface LaunchTerminalMetadata {
+  terminalWindowId?: string;
+  terminalTabIndex?: number;
+  terminalSessionUniqueId?: string;
+  terminalTty?: string;
+}
+
 export function launchCodex(args: string[], customName?: string): void {
   const codexBin = resolveCodexBinary();
   const terminalApp = process.env.TERM_PROGRAM ?? '';
-  const terminalWindowId = captureTerminalWindowId(terminalApp);
-  const terminalTty = process.env.TTY || captureTerminalTty();
+  const metadata = captureTerminalMetadata(terminalApp);
 
   const child = spawn(codexBin, args, {
     stdio: 'inherit',
@@ -18,8 +24,10 @@ export function launchCodex(args: string[], customName?: string): void {
       ...process.env,
       CODEX_BEACON_SESSION_NAME: customName ?? '',
       CODEX_BEACON_TERMINAL_APP: terminalApp,
-      CODEX_BEACON_TERMINAL_WINDOW_ID: terminalWindowId ?? '',
-      CODEX_BEACON_TERMINAL_TTY: terminalTty ?? ''
+      CODEX_BEACON_TERMINAL_WINDOW_ID: metadata.terminalWindowId ?? '',
+      CODEX_BEACON_TERMINAL_TAB_INDEX: String(metadata.terminalTabIndex ?? ''),
+      CODEX_BEACON_TERMINAL_SESSION_UNIQUE_ID: metadata.terminalSessionUniqueId ?? '',
+      CODEX_BEACON_TERMINAL_TTY: metadata.terminalTty ?? ''
     }
   });
 
@@ -37,15 +45,40 @@ export function launchCodex(args: string[], customName?: string): void {
   });
 }
 
-function captureTerminalWindowId(terminalApp: string): string | undefined {
+function captureTerminalMetadata(terminalApp: string): LaunchTerminalMetadata {
   const normalized = terminalApp.toLowerCase();
   if (normalized.includes('iterm')) {
-    return runAppleScript('tell application "iTerm2" to id of current window');
+    return {
+      ...captureITermMetadata(),
+      terminalTty: process.env.TTY || captureTerminalTty()
+    };
   }
   if (normalized.includes('terminal')) {
-    return runAppleScript('tell application "Terminal" to id of front window');
+    return {
+      terminalWindowId: runAppleScript('tell application "Terminal" to id of front window'),
+      terminalTty: process.env.TTY || captureTerminalTty()
+    };
   }
-  return undefined;
+  return {
+    terminalTty: process.env.TTY || captureTerminalTty()
+  };
+}
+
+function captureITermMetadata(): Omit<LaunchTerminalMetadata, 'terminalTty'> {
+  const output = runITermAppleScript(`
+tell current window
+  return (id as string) & "|" & (index of current tab as string) & "|" & (unique id of current session as string)
+end tell
+`);
+  if (!output) {
+    return {};
+  }
+  const [windowId, tabIndex, sessionUniqueId] = output.split('|');
+  return {
+    terminalWindowId: windowId || undefined,
+    terminalTabIndex: parseNumber(tabIndex),
+    terminalSessionUniqueId: sessionUniqueId || undefined
+  };
 }
 
 function captureTerminalTty(): string | undefined {
@@ -72,4 +105,17 @@ function runAppleScript(script: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function runITermAppleScript(body: string): string | undefined {
+  const script = `tell application "iTerm2"\n${body}\nend tell`;
+  return runAppleScript(script) ?? runAppleScript(script.replace('"iTerm2"', '"iTerm"'));
+}
+
+function parseNumber(value?: string): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : undefined;
 }

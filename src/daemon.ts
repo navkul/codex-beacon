@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
-import { socketPath } from './config.js';
+import { loadConfig, socketPath } from './config.js';
 import { upsertFromEvent, setLastSummary } from './session-registry.js';
 import { clearSessionNotification, sendSessionNotification } from './notify.js';
 import { summarizeTranscriptTail } from './summary.js';
@@ -38,11 +38,12 @@ function handleEvent(event: DaemonEvent): void {
   }
 
   if (event.type === 'session-stop') {
-    const summary = summarizeTranscriptTail(event.transcriptPath ?? session.transcriptPath);
-    const updated = setLastSummary(event.sessionId, summary) ?? session;
+    const summary = summarizeTranscriptTail(event.transcriptPath ?? session.transcriptPath, loadConfig());
+    const updated = setLastSummary(event.sessionId, summary.text, summary.state) ?? session;
     sendSessionNotification({
       ...updated,
-      lastSummary: summary
+      lastSummary: summary.text,
+      lastSummaryState: summary.state
     });
   }
 }
