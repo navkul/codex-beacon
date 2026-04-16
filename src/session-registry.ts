@@ -60,11 +60,14 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
     cwd: event.cwd ?? existing?.cwd ?? process.cwd(),
     terminalApp: event.terminalApp ?? existing?.terminalApp,
     terminalWindowId: event.terminalWindowId ?? existing?.terminalWindowId,
+    terminalTabIndex: event.terminalTabIndex ?? existing?.terminalTabIndex,
+    terminalSessionUniqueId: event.terminalSessionUniqueId ?? existing?.terminalSessionUniqueId,
     terminalTty: event.terminalTty ?? existing?.terminalTty,
     transcriptPath: event.transcriptPath ?? existing?.transcriptPath,
     createdAt,
     updatedAt: event.timestamp ?? nowIso(),
     lastSummary: existing?.lastSummary,
+    lastSummaryState: existing?.lastSummaryState,
     status: event.type === 'session-stop' ? 'waiting' : 'active'
   };
   registry.sessions[event.sessionId] = session;
@@ -72,13 +75,14 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
   return session;
 }
 
-export function setLastSummary(sessionId: string, summary: string): SessionRecord | undefined {
+export function setLastSummary(sessionId: string, summary: string, state?: SessionRecord['lastSummaryState']): SessionRecord | undefined {
   const registry = loadRegistry();
   const session = registry.sessions[sessionId];
   if (!session) {
     return undefined;
   }
   session.lastSummary = summary;
+  session.lastSummaryState = state;
   session.updatedAt = nowIso();
   saveRegistry(registry);
   return session;

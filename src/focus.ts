@@ -18,7 +18,12 @@ export function focusSession(sessionId: string): void {
 
   const terminal = (session.terminalApp ?? '').toLowerCase();
   if (terminal.includes('iterm')) {
-    if (focusITermByTty(session.terminalTty) || focusITermByWindowId(session.terminalWindowId)) {
+    if (
+      focusITermBySessionUniqueId(session.terminalSessionUniqueId) ||
+      focusITermByTty(session.terminalTty) ||
+      focusITermByWindowAndTab(session.terminalWindowId, session.terminalTabIndex) ||
+      focusITermByWindowId(session.terminalWindowId)
+    ) {
       return;
     }
     focusITerm();
@@ -49,6 +54,26 @@ function focusITerm(): void {
   if (!runAppleScript('tell application "iTerm2" to activate')) {
     runAppleScript('tell application "iTerm" to activate');
   }
+}
+
+function focusITermBySessionUniqueId(sessionUniqueId?: string): boolean {
+  if (!sessionUniqueId) {
+    return false;
+  }
+  return runITermScript(`
+  repeat with candidateWindow in windows
+    repeat with candidateTab in tabs of candidateWindow
+      repeat with candidateSession in sessions of candidateTab
+        if unique id of candidateSession is ${appleScriptString(sessionUniqueId)} then
+          select candidateWindow
+          select candidateTab
+          select candidateSession
+          return
+        end if
+      end repeat
+    end repeat
+  end repeat
+`);
 }
 
 function focusVSCode(): void {
@@ -125,6 +150,27 @@ function focusITermByWindowId(windowId?: string): boolean {
 `);
 }
 
+function focusITermByWindowAndTab(windowId?: string, tabIndex?: number): boolean {
+  const id = parseAppleScriptInteger(windowId);
+  const index = parseAppleScriptIndex(tabIndex);
+  if (id === undefined || index === undefined) {
+    return false;
+  }
+  return runITermScript(`
+  repeat with candidateWindow in windows
+    if id of candidateWindow is ${id} then
+      repeat with candidateTab in tabs of candidateWindow
+        if index of candidateTab is ${index} then
+          select candidateWindow
+          select candidateTab
+          return
+        end if
+      end repeat
+    end if
+  end repeat
+`);
+}
+
 function focusITermByTty(tty?: string): boolean {
   if (!tty) {
     return false;
@@ -161,6 +207,10 @@ end tell
 function parseAppleScriptInteger(value?: string): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseAppleScriptIndex(value?: number): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function appleScriptString(value: string): string {

@@ -3,10 +3,33 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { AppConfig } from './types.js';
 
-const DEFAULT_CONFIG: AppConfig = {
-  maxNotificationChars: 180,
-  overlayCommand: null
+type LegacyConfig = Partial<AppConfig> & {
+  maxNotificationChars?: number;
 };
+
+const DEFAULT_CONFIG: AppConfig = {
+  overlayCommand: null,
+  overlayWidth: 384,
+  overlayMaxVisibleRows: 4,
+  overlayShowSummary: true,
+  overlaySummaryStyle: 'smart',
+  overlaySummaryMaxChars: 160,
+  overlaySummaryMaxWords: 24,
+  overlaySummaryMaxLines: 2
+};
+
+export const APP_CONFIG_KEYS = [
+  'overlayCommand',
+  'overlayWidth',
+  'overlayMaxVisibleRows',
+  'overlayShowSummary',
+  'overlaySummaryStyle',
+  'overlaySummaryMaxChars',
+  'overlaySummaryMaxWords',
+  'overlaySummaryMaxLines'
+] as const;
+
+export type AppConfigKey = (typeof APP_CONFIG_KEYS)[number];
 
 export function appRoot(): string {
   return process.env.CODEX_BEACON_HOME ?? path.join(homedir(), '.codex-beacon');
@@ -33,12 +56,17 @@ export function configPath(): string {
 export function loadConfig(): AppConfig {
   const file = configPath();
   if (!existsSync(file)) {
-    writeFileSync(file, JSON.stringify(DEFAULT_CONFIG, null, 2));
+    saveConfig(DEFAULT_CONFIG);
     return DEFAULT_CONFIG;
   }
-  const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<AppConfig>;
+  const parsed = JSON.parse(readFileSync(file, 'utf8')) as LegacyConfig;
   return {
     ...DEFAULT_CONFIG,
+    overlaySummaryMaxChars: parsed.overlaySummaryMaxChars ?? parsed.maxNotificationChars ?? DEFAULT_CONFIG.overlaySummaryMaxChars,
     ...parsed
   };
+}
+
+export function saveConfig(config: AppConfig): void {
+  writeFileSync(configPath(), JSON.stringify(config, null, 2));
 }
