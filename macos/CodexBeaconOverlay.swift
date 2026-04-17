@@ -52,6 +52,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let backgroundView = NSVisualEffectView()
     private let headerTitle = NSTextField(labelWithString: "Beacon")
     private let headerSubtitle = NSTextField(labelWithString: "No waiting sessions")
+    private let scrollView = NSScrollView()
+    private let rowsContainer = NSView()
     private let contentStack = NSStackView()
     private var items: [String: OverlayItem] = [:]
     private var presentation = OverlayPresentation(width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
@@ -101,21 +103,40 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerStack.spacing = 2
         headerStack.translatesAutoresizingMaskIntoConstraints = false
 
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        rowsContainer.translatesAutoresizingMaskIntoConstraints = false
+
         contentStack.orientation = .vertical
         contentStack.alignment = .leading
         contentStack.spacing = 10
         contentStack.translatesAutoresizingMaskIntoConstraints = false
+        rowsContainer.addSubview(contentStack)
+        NSLayoutConstraint.activate([
+            contentStack.leadingAnchor.constraint(equalTo: rowsContainer.leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: rowsContainer.trailingAnchor),
+            contentStack.topAnchor.constraint(equalTo: rowsContainer.topAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: rowsContainer.bottomAnchor),
+            rowsContainer.widthAnchor.constraint(equalTo: scrollView.widthAnchor)
+        ])
+        scrollView.documentView = rowsContainer
 
         backgroundView.addSubview(headerStack)
-        backgroundView.addSubview(contentStack)
+        backgroundView.addSubview(scrollView)
         NSLayoutConstraint.activate([
             headerStack.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 20),
             headerStack.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -20),
             headerStack.topAnchor.constraint(equalTo: backgroundView.topAnchor, constant: 16),
-            contentStack.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 16),
-            contentStack.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -16),
-            contentStack.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 14),
-            contentStack.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor, constant: -16)
+            scrollView.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 16),
+            scrollView.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -12),
+            scrollView.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 14),
+            scrollView.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor, constant: -16)
         ])
 
         let root = NSView(frame: panel.frame)
@@ -195,12 +216,12 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
         let visibleItems = items.values
             .sorted(by: { $0.displayName < $1.displayName })
-            .prefix(max(1, presentation.maxVisibleRows))
 
         for item in visibleItems {
             contentStack.addArrangedSubview(makeRow(for: item))
         }
 
+        scrollView.verticalScroller?.alphaValue = items.count > presentation.maxVisibleRows ? 1 : 0
         layoutPanel()
     }
 
@@ -239,7 +260,14 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         arrow.contentTintColor = NSColor.tertiaryLabelColor.withAlphaComponent(0.92)
         arrow.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
 
-        let topRow = NSStackView(views: [dot, title, spacer(), arrow])
+        let dismissButton = subtleIconButton(
+            systemName: "xmark",
+            description: "Dismiss",
+            action: #selector(dismissSession(_:)),
+            sessionId: item.sessionId
+        )
+
+        let topRow = NSStackView(views: [dot, title, spacer(), arrow, dismissButton])
         topRow.orientation = .horizontal
         topRow.alignment = .centerY
         topRow.spacing = 10
@@ -261,8 +289,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         button.identifier = NSUserInterfaceItemIdentifier(item.sessionId)
         button.translatesAutoresizingMaskIntoConstraints = false
 
-        container.addSubview(bodyStack)
         container.addSubview(button)
+        container.addSubview(bodyStack)
         NSLayoutConstraint.activate([
             container.widthAnchor.constraint(equalToConstant: CGFloat(presentation.width) - 32),
             dot.widthAnchor.constraint(equalToConstant: 7),
@@ -318,7 +346,17 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return
         }
         launch(item.focusCommand)
+        items.removeValue(forKey: sessionId)
+        refresh()
         panel.orderOut(nil)
+    }
+
+    @objc private func dismissSession(_ sender: NSButton) {
+        guard let sessionId = sender.identifier?.rawValue else {
+            return
+        }
+        items.removeValue(forKey: sessionId)
+        refresh()
     }
 
     private func launch(_ command: FocusCommand) {
@@ -340,6 +378,25 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         let view = NSView()
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return view
+    }
+
+    private func subtleIconButton(systemName: String, description: String, action: Selector, sessionId: String) -> NSButton {
+        let button = NSButton(title: "", target: self, action: action)
+        button.identifier = NSUserInterfaceItemIdentifier(sessionId)
+        button.isBordered = false
+        button.bezelStyle = .shadowlessSquare
+        button.image = NSImage(
+            systemSymbolName: systemName,
+            accessibilityDescription: description
+        )
+        button.contentTintColor = NSColor.tertiaryLabelColor.withAlphaComponent(0.9)
+        button.imageScaling = .scaleProportionallyDown
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: 14),
+            button.heightAnchor.constraint(equalToConstant: 14)
+        ])
+        return button
     }
 
     private func stateColor(_ state: SummaryState) -> NSColor {
