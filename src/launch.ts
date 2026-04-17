@@ -48,8 +48,11 @@ export function launchCodex(args: string[], customName?: string): void {
 function captureTerminalMetadata(terminalApp: string): LaunchTerminalMetadata {
   const normalized = terminalApp.toLowerCase();
   if (normalized.includes('iterm')) {
+    const metadata = captureITermMetadata();
+    const envSessionUniqueId = parseITermSessionUniqueId(process.env.ITERM_SESSION_ID ?? process.env.TERM_SESSION_ID);
     return {
-      ...captureITermMetadata(),
+      ...metadata,
+      terminalSessionUniqueId: parseITermSessionUniqueId(process.env.CODEX_BEACON_TERMINAL_SESSION_UNIQUE_ID) ?? envSessionUniqueId ?? metadata.terminalSessionUniqueId,
       terminalTty: process.env.TTY || captureTerminalTty()
     };
   }
@@ -66,8 +69,15 @@ function captureTerminalMetadata(terminalApp: string): LaunchTerminalMetadata {
 
 function captureITermMetadata(): Omit<LaunchTerminalMetadata, 'terminalTty'> {
   const output = runITermAppleScript(`
+set tabPosition to 0
 tell current window
-  return (id as string) & "|" & (index of current tab as string) & "|" & (unique id of current session as string)
+  repeat with i from 1 to (count of tabs)
+    if current tab is tab i then
+      set tabPosition to i
+      exit repeat
+    end if
+  end repeat
+  return (id as string) & "|" & (tabPosition as string) & "|" & (unique id of current session as string)
 end tell
 `);
   if (!output) {
@@ -118,4 +128,17 @@ function parseNumber(value?: string): number | undefined {
   }
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+function parseITermSessionUniqueId(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parts = trimmed.split(':');
+  const candidate = parts.at(-1)?.trim();
+  return candidate || undefined;
 }

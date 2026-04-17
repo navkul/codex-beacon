@@ -10,6 +10,18 @@ function runAppleScript(script: string): boolean {
   }
 }
 
+function runAppleScriptBoolean(script: string): boolean {
+  try {
+    const output = execFileSync('osascript', ['-e', script], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim().toLowerCase();
+    return output === 'true';
+  } catch {
+    return false;
+  }
+}
+
 export function focusSession(sessionId: string): void {
   const session = getSession(sessionId);
   if (!session) {
@@ -18,16 +30,10 @@ export function focusSession(sessionId: string): void {
 
   const terminal = (session.terminalApp ?? '').toLowerCase();
   if (terminal.includes('iterm')) {
-    if (
-      focusITermBySessionUniqueId(session.terminalSessionUniqueId) ||
-      focusITermByTty(session.terminalTty) ||
-      focusITermByWindowAndTab(session.terminalWindowId, session.terminalTabIndex) ||
-      focusITermByWindowId(session.terminalWindowId)
-    ) {
+    if (focusITermSession(session)) {
       return;
     }
-    focusITerm();
-    return;
+    throw new Error(`Unable to locate the original iTerm session for ${session.displayName}`);
   }
 
   if (terminal.includes('vscode') || terminal.includes('visual studio code')) {
@@ -40,39 +46,47 @@ export function focusSession(sessionId: string): void {
     return;
   }
 
-  if (focusTerminalByTty(session.terminalTty) || focusTerminalByWindowId(session.terminalWindowId)) {
+  if (terminal.includes('terminal')) {
+    if (focusTerminalSession(session)) {
+      return;
+    }
+    throw new Error(`Unable to locate the original Terminal.app window for ${session.displayName}`);
+  }
+
+  if (focusITermSession(session) || focusTerminalSession(session)) {
     return;
   }
-  focusTerminal();
-}
 
-function focusTerminal(): void {
-  runAppleScript('tell application "Terminal" to activate');
-}
-
-function focusITerm(): void {
-  if (!runAppleScript('tell application "iTerm2" to activate')) {
-    runAppleScript('tell application "iTerm" to activate');
+  if (!terminal && (session.terminalSessionUniqueId || session.terminalTty || session.terminalWindowId)) {
+    throw new Error(`Unable to locate a live terminal target for session: ${sessionId}`);
   }
+
+  if (focusVSCodeIfRunning() || focusCursorIfRunning()) {
+    return;
+  }
+
+  throw new Error(`Unable to locate a live terminal target for session: ${sessionId}`);
 }
 
 function focusITermBySessionUniqueId(sessionUniqueId?: string): boolean {
   if (!sessionUniqueId) {
     return false;
   }
-  return runITermScript(`
+  return runITermBooleanScript(`
   repeat with candidateWindow in windows
     repeat with candidateTab in tabs of candidateWindow
       repeat with candidateSession in sessions of candidateTab
         if unique id of candidateSession is ${appleScriptString(sessionUniqueId)} then
+          activate
           select candidateWindow
           select candidateTab
           select candidateSession
-          return
+          return true
         end if
       end repeat
     end repeat
   end repeat
+  return false
 `);
 }
 
@@ -82,10 +96,18 @@ function focusVSCode(): void {
   }
 }
 
+function focusVSCodeIfRunning(): boolean {
+  return activateBundleIfRunning('com.microsoft.VSCode');
+}
+
 function focusCursor(): void {
   if (!activateBundle('com.todesktop.230313mzl4w4u92')) {
     runAppleScript('tell application "Cursor" to activate');
   }
+}
+
+function focusCursorIfRunning(): boolean {
+  return activateBundleIfRunning('com.todesktop.230313mzl4w4u92');
 }
 
 function activateBundle(bundleId: string): boolean {
@@ -97,20 +119,43 @@ function activateBundle(bundleId: string): boolean {
   }
 }
 
+function activateBundleIfRunning(bundleId: string): boolean {
+  if (!isBundleRunning(bundleId)) {
+    return false;
+  }
+  return activateBundle(bundleId);
+}
+
+function isBundleRunning(bundleId: string): boolean {
+  try {
+    const output = execFileSync('osascript', ['-e', `application id "${bundleId}" is running`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim().toLowerCase();
+    return output === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function focusTerminalByWindowId(windowId?: string): boolean {
   const id = parseAppleScriptInteger(windowId);
   if (!id) {
     return false;
   }
-  return runAppleScript(`
+  return runAppleScriptBoolean(`
+if application id "com.apple.Terminal" is not running then
+  return false
+end if
 tell application "Terminal"
-  activate
   repeat with candidateWindow in windows
     if id of candidateWindow is ${id} then
+      activate
       set index of candidateWindow to 1
-      return
+      return true
     end if
   end repeat
+  return false
 end tell
 `);
 }
@@ -119,18 +164,22 @@ function focusTerminalByTty(tty?: string): boolean {
   if (!tty) {
     return false;
   }
-  return runAppleScript(`
+  return runAppleScriptBoolean(`
+if application id "com.apple.Terminal" is not running then
+  return false
+end if
 tell application "Terminal"
-  activate
   repeat with candidateWindow in windows
     repeat with candidateTab in tabs of candidateWindow
       if tty of candidateTab is ${appleScriptString(tty)} then
+        activate
         set selected tab of candidateWindow to candidateTab
         set index of candidateWindow to 1
-        return
+        return true
       end if
     end repeat
   end repeat
+  return false
 end tell
 `);
 }
@@ -140,13 +189,15 @@ function focusITermByWindowId(windowId?: string): boolean {
   if (!id) {
     return false;
   }
-  return runITermScript(`
+  return runITermBooleanScript(`
   repeat with candidateWindow in windows
     if id of candidateWindow is ${id} then
+      activate
       set index of candidateWindow to 1
-      return
+      return true
     end if
   end repeat
+  return false
 `);
 }
 
@@ -156,18 +207,19 @@ function focusITermByWindowAndTab(windowId?: string, tabIndex?: number): boolean
   if (id === undefined || index === undefined) {
     return false;
   }
-  return runITermScript(`
+  return runITermBooleanScript(`
   repeat with candidateWindow in windows
     if id of candidateWindow is ${id} then
-      repeat with candidateTab in tabs of candidateWindow
-        if index of candidateTab is ${index} then
-          select candidateWindow
-          select candidateTab
-          return
-        end if
-      end repeat
+      if (count of tabs of candidateWindow) >= ${index} then
+        set candidateTab to tab ${index} of candidateWindow
+        activate
+        select candidateWindow
+        select candidateTab
+        return true
+      end if
     end if
   end repeat
+  return false
 `);
 }
 
@@ -175,33 +227,50 @@ function focusITermByTty(tty?: string): boolean {
   if (!tty) {
     return false;
   }
-  return runITermScript(`
+  return runITermBooleanScript(`
   repeat with candidateWindow in windows
     repeat with candidateTab in tabs of candidateWindow
       repeat with candidateSession in sessions of candidateTab
         if tty of candidateSession is ${appleScriptString(tty)} then
+          activate
           select candidateWindow
           select candidateTab
           select candidateSession
-          return
+          return true
         end if
       end repeat
     end repeat
   end repeat
+  return false
 `);
 }
 
-function runITermScript(body: string): boolean {
+function runITermBooleanScript(body: string): boolean {
   const script = `
+if application id "com.googlecode.iterm2" is not running then
+  return false
+end if
 tell application "iTerm2"
-  activate
 ${body}
 end tell
 `;
-  if (runAppleScript(script)) {
+  if (runAppleScriptBoolean(script)) {
     return true;
   }
-  return runAppleScript(script.replace('"iTerm2"', '"iTerm"'));
+  return runAppleScriptBoolean(script.replace('"iTerm2"', '"iTerm"'));
+}
+
+function focusITermSession(session: NonNullable<ReturnType<typeof getSession>>): boolean {
+  return (
+    focusITermBySessionUniqueId(session.terminalSessionUniqueId) ||
+    focusITermByTty(session.terminalTty) ||
+    focusITermByWindowAndTab(session.terminalWindowId, session.terminalTabIndex) ||
+    focusITermByWindowId(session.terminalWindowId)
+  );
+}
+
+function focusTerminalSession(session: NonNullable<ReturnType<typeof getSession>>): boolean {
+  return focusTerminalByTty(session.terminalTty) || focusTerminalByWindowId(session.terminalWindowId);
 }
 
 function parseAppleScriptInteger(value?: string): number | undefined {
@@ -210,7 +279,7 @@ function parseAppleScriptInteger(value?: string): number | undefined {
 }
 
 function parseAppleScriptIndex(value?: number): number | undefined {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function appleScriptString(value: string): string {
