@@ -115,9 +115,8 @@ final class OverlayLogger {
     }
 }
 
-final class OverlayPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 final class OverlayStateStore {
@@ -526,18 +525,18 @@ final class OverlayRowView: NSView {
 final class OverlayApp: NSObject, NSApplicationDelegate {
     private let logger = OverlayLogger.shared
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let panel = OverlayPanel(
+    private let overlayWindow = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 384, height: 180),
-        styleMask: [.borderless, .nonactivatingPanel],
+        styleMask: [.borderless],
         backing: .buffered,
         defer: false
     )
-    private let backgroundView = NSVisualEffectView()
+    private let rootView = FlippedView(frame: NSRect(x: 0, y: 0, width: 384, height: 180))
+    private let backgroundView = NSView()
     private let headerTitle = NSTextField(labelWithString: "Codex Beacon")
     private let headerSubtitle = NSTextField(labelWithString: "No waiting sessions")
     private let scrollView = NSScrollView()
-    private let rowsContainer = NSView()
-    private let contentStack = NSStackView()
+    private let rowsContainer = FlippedView(frame: .zero)
     private let stateStore = OverlayStateStore(url: OverlayApp.overlayStateURL())
     private var items: [String: OverlayItem] = [:]
     private var presentation = OverlayPresentation(width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
@@ -555,16 +554,18 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         logger.log("applicationDidFinishLaunching activationPolicy=accessory snapshotPath=\(snapshotURL.path)")
         configureStatusItem()
+        logger.log("applicationDidFinishLaunching step=status-item")
         configurePanel()
-        refresh()
-        loadSnapshotIfNeeded(reason: "did-finish")
+        logger.log("applicationDidFinishLaunching step=window")
+        loadSnapshotIfNeeded(reason: "did-finish", allowSameRaw: true)
+        logger.log("applicationDidFinishLaunching step=did-finish-load")
         startSnapshotPolling()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else {
                 return
             }
             self.logger.log("deferredSnapshotReload")
-            self.loadSnapshotIfNeeded(reason: "deferred")
+            self.loadSnapshotIfNeeded(reason: "deferred", allowSameRaw: true)
             if !self.items.isEmpty {
                 self.showOverlay(reason: "deferred-launch")
             }
@@ -575,7 +576,13 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         guard let loaded = loadSnapshot() else {
             return
         }
-        applySnapshot(raw: loaded.raw, snapshot: loaded.snapshot, reason: "bootstrap")
+        applySnapshot(
+            raw: loaded.raw,
+            snapshot: loaded.snapshot,
+            reason: "bootstrap",
+            allowSameRaw: true,
+            shouldRender: false
+        )
     }
 
     private static func overlayStateURL() -> URL {
@@ -603,35 +610,43 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func configurePanel() {
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .moveToActiveSpace, .fullScreenAuxiliary]
-        panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = false
-        panel.isFloatingPanel = true
+        logger.log("configurePanel step=begin")
 
-        backgroundView.material = .hudWindow
-        backgroundView.blendingMode = .behindWindow
-        backgroundView.state = .active
+        overlayWindow.isOpaque = false
+        overlayWindow.backgroundColor = .clear
+        overlayWindow.hasShadow = true
+        overlayWindow.level = .statusBar
+        overlayWindow.collectionBehavior = [.canJoinAllSpaces, .moveToActiveSpace, .fullScreenAuxiliary]
+        overlayWindow.ignoresMouseEvents = false
+        overlayWindow.isReleasedWhenClosed = false
+
+        rootView.wantsLayer = true
+        rootView.frame = NSRect(x: 0, y: 0, width: presentation.width, height: 180)
+
         backgroundView.wantsLayer = true
         backgroundView.layer?.cornerRadius = 22
         backgroundView.layer?.masksToBounds = true
         backgroundView.layer?.borderWidth = 1
         backgroundView.layer?.borderColor = NSColor.white.withAlphaComponent(0.08).cgColor
-        backgroundView.translatesAutoresizingMaskIntoConstraints = false
+        backgroundView.layer?.backgroundColor = NSColor(calibratedWhite: 0.11, alpha: 0.94).cgColor
+        backgroundView.frame = rootView.bounds
+        backgroundView.autoresizingMask = [.width, .height]
 
         headerTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         headerTitle.textColor = NSColor.labelColor.withAlphaComponent(0.94)
+        headerTitle.isBezeled = false
+        headerTitle.isBordered = false
+        headerTitle.drawsBackground = false
+        headerTitle.isEditable = false
+        headerTitle.isSelectable = false
+
         headerSubtitle.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         headerSubtitle.textColor = NSColor.secondaryLabelColor
-
-        let headerStack = NSStackView(views: [headerTitle, headerSubtitle])
-        headerStack.orientation = .vertical
-        headerStack.alignment = .leading
-        headerStack.spacing = 2
-        headerStack.translatesAutoresizingMaskIntoConstraints = false
+        headerSubtitle.isBezeled = false
+        headerSubtitle.isBordered = false
+        headerSubtitle.drawsBackground = false
+        headerSubtitle.isEditable = false
+        headerSubtitle.isSelectable = false
 
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
@@ -639,61 +654,40 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        rowsContainer.translatesAutoresizingMaskIntoConstraints = false
-
-        contentStack.orientation = .vertical
-        contentStack.alignment = .leading
-        contentStack.spacing = 10
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        rowsContainer.addSubview(contentStack)
-        NSLayoutConstraint.activate([
-            contentStack.leadingAnchor.constraint(equalTo: rowsContainer.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: rowsContainer.trailingAnchor),
-            contentStack.topAnchor.constraint(equalTo: rowsContainer.topAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: rowsContainer.bottomAnchor),
-            rowsContainer.widthAnchor.constraint(equalTo: scrollView.widthAnchor)
-        ])
+        rowsContainer.wantsLayer = false
+        rowsContainer.frame = NSRect(x: 0, y: 0, width: presentation.width - 32, height: 1)
         scrollView.documentView = rowsContainer
 
-        backgroundView.addSubview(headerStack)
+        backgroundView.addSubview(headerTitle)
+        backgroundView.addSubview(headerSubtitle)
         backgroundView.addSubview(scrollView)
-        NSLayoutConstraint.activate([
-            headerStack.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 20),
-            headerStack.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -20),
-            headerStack.topAnchor.constraint(equalTo: backgroundView.topAnchor, constant: 16),
-            scrollView.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 16),
-            scrollView.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -12),
-            scrollView.topAnchor.constraint(equalTo: headerStack.bottomAnchor, constant: 14),
-            scrollView.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor, constant: -16)
-        ])
 
-        let root = NSView(frame: panel.frame)
-        root.addSubview(backgroundView)
-        NSLayoutConstraint.activate([
-            backgroundView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            backgroundView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            backgroundView.topAnchor.constraint(equalTo: root.topAnchor),
-            backgroundView.bottomAnchor.constraint(equalTo: root.bottomAnchor)
-        ])
-        panel.contentView = root
-        panel.orderOut(nil)
-        logger.log("configurePanel level=statusBar behavior=\(panel.collectionBehavior.rawValue)")
+        rootView.subviews.forEach { $0.removeFromSuperview() }
+        rootView.addSubview(backgroundView)
+        overlayWindow.contentView = rootView
+        overlayWindow.orderOut(nil)
+        logger.log("configurePanel step=end")
     }
 
     private func startSnapshotPolling() {
         snapshotTimer?.invalidate()
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
-            self?.loadSnapshotIfNeeded(reason: "poll")
+            self?.loadSnapshotIfNeeded(reason: "poll", allowSameRaw: false)
         }
     }
 
-    private func loadSnapshotIfNeeded(reason: String) {
+    private func loadSnapshotIfNeeded(reason: String, allowSameRaw: Bool) {
         guard let loaded = loadSnapshot() else {
             return
         }
-        applySnapshot(raw: loaded.raw, snapshot: loaded.snapshot, reason: reason)
+        applySnapshot(
+            raw: loaded.raw,
+            snapshot: loaded.snapshot,
+            reason: reason,
+            allowSameRaw: allowSameRaw,
+            shouldRender: true
+        )
     }
 
     private func loadSnapshot() -> (raw: String, snapshot: OverlaySnapshot)? {
@@ -705,8 +699,14 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         return (raw, snapshot)
     }
 
-    private func applySnapshot(raw: String, snapshot: OverlaySnapshot, reason: String) {
-        if raw == lastSnapshotRaw, reason != "bootstrap" {
+    private func applySnapshot(
+        raw: String,
+        snapshot: OverlaySnapshot,
+        reason: String,
+        allowSameRaw: Bool,
+        shouldRender: Bool
+    ) {
+        if raw == lastSnapshotRaw, !allowSameRaw {
             return
         }
         lastSnapshotRaw = raw
@@ -734,51 +734,61 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
 
         items = nextItems
-        logger.log("applySnapshot reason=\(reason) items=\(items.count)")
-        refresh()
-        if !items.isEmpty {
-            showOverlay(reason: reason)
+        logger.log("applySnapshot reason=\(reason) items=\(items.count) render=\(shouldRender)")
+        if shouldRender {
+            refresh()
+            if !items.isEmpty {
+                showOverlay(reason: reason)
+            }
         }
     }
 
     private func refresh() {
+        logger.log("refresh start items=\(items.count)")
         updateStatusItem()
         headerSubtitle.stringValue = items.isEmpty ? "No waiting sessions" : "\(items.count) waiting"
 
-        for subview in contentStack.arrangedSubviews {
-            contentStack.removeArrangedSubview(subview)
-            subview.removeFromSuperview()
-        }
-
         guard !items.isEmpty else {
-            logger.log("refresh items=0 panel=orderOut")
-            panel.orderOut(nil)
+            logger.log("refresh items=0 window=orderOut")
+            overlayWindow.orderOut(nil)
             return
         }
 
+        for subview in rowsContainer.subviews {
+            subview.removeFromSuperview()
+        }
+
+        let rowWidth = CGFloat(presentation.width) - 32
+        let rowHeight: CGFloat = presentation.summaryVisible ? 112 : 86
+        var y: CGFloat = 0
+
         for item in orderedItems() {
-            contentStack.addArrangedSubview(
-                OverlayRowView(
-                    item: item,
-                    presentation: presentation,
-                    openAction: { [weak self] sessionId in
-                        self?.openSession(sessionId: sessionId)
-                    },
-                    dismissAction: { [weak self] sessionId in
-                        self?.dismissSession(sessionId: sessionId)
-                    },
-                    repromptAction: { [weak self] sessionId, text in
-                        self?.repromptSession(sessionId: sessionId, text: text)
-                    },
-                    moveAction: { [weak self] sessionId, point in
-                        self?.moveSession(sessionId: sessionId, to: point)
-                    }
-                )
+            let row = OverlayRowView(
+                item: item,
+                presentation: presentation,
+                openAction: { [weak self] sessionId in
+                    self?.openSession(sessionId: sessionId)
+                },
+                dismissAction: { [weak self] sessionId in
+                    self?.dismissSession(sessionId: sessionId)
+                },
+                repromptAction: { [weak self] sessionId, text in
+                    self?.repromptSession(sessionId: sessionId, text: text)
+                },
+                moveAction: { [weak self] sessionId, point in
+                    self?.moveSession(sessionId: sessionId, to: point)
+                }
             )
+            row.translatesAutoresizingMaskIntoConstraints = true
+            row.frame = NSRect(x: 0, y: y, width: rowWidth, height: rowHeight)
+            rowsContainer.addSubview(row)
+            y += rowHeight + 10
         }
 
         scrollView.verticalScroller?.alphaValue = items.count > presentation.maxVisibleRows ? 1 : 0
+        rowsContainer.frame = NSRect(x: 0, y: 0, width: rowWidth, height: max(1, y - 10))
         layoutPanel()
+        logger.log("refresh end arranged=\(rowsContainer.subviews.count)")
     }
 
     private func orderedItems() -> [OverlayItem] {
@@ -811,18 +821,33 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         let visibleRows = min(max(items.count, 1), max(presentation.maxVisibleRows, 1))
         let height = 58 + (CGFloat(visibleRows) * rowHeight) + 26
         let width = CGFloat(presentation.width)
-        let frame = targetScreen().visibleFrame
-        panel.setFrame(
-            NSRect(x: frame.maxX - width - 18, y: frame.maxY - height - 18, width: width, height: height),
-            display: true
-        )
-        logger.log("layoutPanel frame=\(NSStringFromRect(panel.frame))")
+        rootView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        backgroundView.frame = rootView.bounds
+        headerTitle.frame = NSRect(x: 20, y: 16, width: width - 40, height: 18)
+        headerSubtitle.frame = NSRect(x: 20, y: 34, width: width - 40, height: 14)
+        scrollView.frame = NSRect(x: 16, y: 58, width: width - 28, height: height - 74)
+        if let button = statusItem.button, let buttonWindow = button.window {
+            let buttonRectInWindow = button.convert(button.bounds, to: nil)
+            let buttonRectOnScreen = buttonWindow.convertToScreen(buttonRectInWindow)
+            overlayWindow.setFrame(
+                NSRect(
+                    x: buttonRectOnScreen.maxX - width,
+                    y: buttonRectOnScreen.minY - height - 6,
+                    width: width,
+                    height: height
+                ),
+                display: true
+            )
+        } else {
+            overlayWindow.setFrame(NSRect(x: 0, y: 0, width: width, height: height), display: true)
+        }
+        logger.log("layoutPanel frame=\(NSStringFromRect(overlayWindow.frame))")
     }
 
     @objc private func toggleOverlay() {
-        if panel.isVisible {
+        if overlayWindow.isVisible {
             logger.log("toggleOverlay action=hide")
-            panel.orderOut(nil)
+            overlayWindow.orderOut(nil)
         } else {
             logger.log("toggleOverlay action=show")
             showOverlay(reason: "toggle")
@@ -835,12 +860,11 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
 
         layoutPanel()
-        logger.log("showOverlay reason=\(reason) visibleBefore=\(panel.isVisible)")
+        logger.log("showOverlay reason=\(reason) visibleBefore=\(overlayWindow.isVisible)")
         NSApp.activate(ignoringOtherApps: false)
-        panel.makeKeyAndOrderFront(nil)
-        panel.orderFrontRegardless()
-        panel.makeFirstResponder(nil)
-        logger.log("showOverlay visibleAfter=\(panel.isVisible) key=\(panel.isKeyWindow)")
+        overlayWindow.makeKeyAndOrderFront(nil)
+        overlayWindow.orderFrontRegardless()
+        logger.log("showOverlay visibleAfter=\(overlayWindow.isVisible)")
     }
 
     private func openSession(sessionId: String) {
@@ -849,7 +873,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
         launch(item.focusCommand)
         dismissSession(sessionId: sessionId)
-        panel.orderOut(nil)
+        overlayWindow.orderOut(nil)
     }
 
     private func dismissSession(sessionId: String) {
@@ -878,16 +902,16 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func moveSession(sessionId: String, to locationInWindow: NSPoint) {
-        let pointInStack = contentStack.convert(locationInWindow, from: nil)
-        let rows = contentStack.arrangedSubviews.compactMap { $0 as? OverlayRowView }
-        let orderedRows = rows.sorted { $0.frame.midY > $1.frame.midY }
+        let pointInRows = rowsContainer.convert(locationInWindow, from: nil)
+        let rows = rowsContainer.subviews.compactMap { $0 as? OverlayRowView }
+        let orderedRows = rows.sorted { $0.frame.minY < $1.frame.minY }
         guard let fromIndex = orderedRows.firstIndex(where: { $0.sessionId == sessionId }) else {
             return
         }
 
         var targetIndex = orderedRows.count - 1
         for (index, row) in orderedRows.enumerated() {
-            if pointInStack.y > row.frame.midY {
+            if pointInRows.y < row.frame.midY {
                 targetIndex = index
                 break
             }
@@ -903,20 +927,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         stateStore.replace(with: sessionIds)
         logger.log("moveSession sessionId=\(sessionId) from=\(fromIndex) to=\(targetIndex)")
         refresh()
-    }
-
-    private func targetScreen() -> NSScreen {
-        let mouseLocation = NSEvent.mouseLocation
-        if let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) {
-            return screen
-        }
-        if let panelScreen = panel.screen {
-            return panelScreen
-        }
-        if let mainScreen = NSScreen.main {
-            return mainScreen
-        }
-        return NSScreen.screens[0]
     }
 
     @discardableResult
