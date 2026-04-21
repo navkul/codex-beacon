@@ -2,6 +2,22 @@ export type SessionStatus = 'active' | 'waiting';
 export type SummaryState = 'ready' | 'done' | 'blocked' | 'failed' | 'needs-input';
 export type SummaryStyle = 'smart' | 'raw';
 
+export interface UsageWindowSnapshot {
+  usedPercent: number;
+  windowMinutes?: number;
+  resetsAt?: number;
+  resetsInSeconds?: number;
+}
+
+export interface SessionUsageSnapshot {
+  primary?: UsageWindowSnapshot;
+  secondary?: UsageWindowSnapshot;
+  totalTokens?: number;
+  lastTurnTokens?: number;
+  planType?: string;
+  capturedAt?: string;
+}
+
 export interface SessionRecord {
   sessionId: string;
   displayName: string;
@@ -16,6 +32,7 @@ export interface SessionRecord {
   updatedAt: string;
   lastSummary?: string;
   lastSummaryState?: SummaryState;
+  lastUsage?: SessionUsageSnapshot;
   status: SessionStatus;
 }
 

@@ -2,10 +2,11 @@ import { ChildProcess, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { loadConfig } from './config.js';
-import { SessionRecord, SummaryState } from './types.js';
+import { loadConfig, overlayStatePath } from './config.js';
+import { canRepromptSession } from './reprompt.js';
+import { SessionRecord, SessionUsageSnapshot, SummaryState } from './types.js';
 
-interface OverlayFocusCommand {
+interface OverlayCommand {
   executable: string;
   args: string[];
 }
@@ -16,8 +17,10 @@ interface OverlayEvent {
   displayName?: string;
   summary?: string;
   state?: SummaryState;
+  usage?: SessionUsageSnapshot;
   timestamp: string;
-  focusCommand?: OverlayFocusCommand;
+  focusCommand?: OverlayCommand;
+  repromptCommand?: OverlayCommand;
   presentation?: OverlayPresentation;
 }
 
@@ -46,8 +49,10 @@ export function sendSessionNotification(session: SessionRecord): void {
     displayName: session.displayName,
     summary: message,
     state: session.lastSummaryState ?? 'ready',
+    usage: session.lastUsage,
     timestamp: new Date().toISOString(),
     focusCommand: focusCommand(session.sessionId),
+    repromptCommand: canRepromptSession(session) ? repromptCommand(session.sessionId) : undefined,
     presentation: {
       width: config.overlayWidth,
       maxVisibleRows: config.overlayMaxVisibleRows,
@@ -80,15 +85,21 @@ function ensureOverlayProcess(): ChildProcess {
   }
 
   const command = overlayCommand();
-  const process = spawn(command, [], { stdio: ['pipe', 'ignore', 'ignore'] });
-  process.on('exit', () => {
+  const child = spawn(command, [], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+    env: {
+      ...process.env,
+      CODEX_BEACON_OVERLAY_STATE_PATH: overlayStatePath()
+    }
+  });
+  child.on('exit', () => {
     overlayProcess = undefined;
   });
-  process.on('error', () => {
+  child.on('error', () => {
     overlayProcess = undefined;
   });
-  overlayProcess = process;
-  return process;
+  overlayProcess = child;
+  return child;
 }
 
 function overlayCommand(): string {
@@ -105,10 +116,18 @@ function overlayCommand(): string {
   return path.join(process.cwd(), 'dist', 'macos', 'CodexBeaconOverlay');
 }
 
-function focusCommand(sessionId: string): OverlayFocusCommand {
+function focusCommand(sessionId: string): OverlayCommand {
   const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
   return {
     executable: process.execPath,
     args: [cliPath, 'focus', '--session-id', sessionId]
+  };
+}
+
+function repromptCommand(sessionId: string): OverlayCommand {
+  const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+  return {
+    executable: process.execPath,
+    args: [cliPath, 'reprompt', '--session-id', sessionId, '--message']
   };
 }

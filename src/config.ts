@@ -53,6 +53,10 @@ export function configPath(): string {
   return path.join(ensureAppRoot(), 'config.json');
 }
 
+export function overlayStatePath(): string {
+  return path.join(ensureAppRoot(), 'overlay-state.json');
+}
+
 export function loadConfig(): AppConfig {
   const file = configPath();
   if (!existsSync(file)) {
