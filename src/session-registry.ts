@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { registryPath } from './config.js';
-import { DaemonEvent, RegistryFile, SessionRecord } from './types.js';
+import { DaemonEvent, RegistryFile, SessionRecord, SessionUsageSnapshot } from './types.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -68,6 +68,7 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
     updatedAt: event.timestamp ?? nowIso(),
     lastSummary: existing?.lastSummary,
     lastSummaryState: existing?.lastSummaryState,
+    lastUsage: existing?.lastUsage,
     status: event.type === 'session-stop' ? 'waiting' : 'active'
   };
   registry.sessions[event.sessionId] = session;
@@ -75,7 +76,12 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
   return session;
 }
 
-export function setLastSummary(sessionId: string, summary: string, state?: SessionRecord['lastSummaryState']): SessionRecord | undefined {
+export function setSessionStopSnapshot(
+  sessionId: string,
+  summary: string,
+  state?: SessionRecord['lastSummaryState'],
+  usage?: SessionUsageSnapshot
+): SessionRecord | undefined {
   const registry = loadRegistry();
   const session = registry.sessions[sessionId];
   if (!session) {
@@ -83,6 +89,7 @@ export function setLastSummary(sessionId: string, summary: string, state?: Sessi
   }
   session.lastSummary = summary;
   session.lastSummaryState = state;
+  session.lastUsage = usage;
   session.updatedAt = nowIso();
   saveRegistry(registry);
   return session;

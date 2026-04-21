@@ -8,6 +8,7 @@ import { runUserPromptSubmitHook } from './hook-user-prompt-submit.js';
 import { installMessage } from './install.js';
 import { launchCodex } from './launch.js';
 import { APP_CONFIG_KEYS, AppConfigKey, configPath, loadConfig, saveConfig } from './config.js';
+import { repromptSession } from './reprompt.js';
 import { listSessions } from './session-registry.js';
 
 const program = new Command();
@@ -46,6 +47,15 @@ program
   .requiredOption('--session-id <sessionId>')
   .action((options: { sessionId: string }) => {
     focusSession(options.sessionId);
+  });
+
+program
+  .command('reprompt')
+  .description('Send a prompt to a tracked session without focusing it')
+  .requiredOption('--session-id <sessionId>')
+  .requiredOption('--message <message>')
+  .action((options: { sessionId: string; message: string }) => {
+    repromptSession(options.sessionId, options.message);
   });
 
 program

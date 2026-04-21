@@ -1,10 +1,11 @@
 import net from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 import { loadConfig, socketPath } from './config.js';
-import { upsertFromEvent, setLastSummary } from './session-registry.js';
+import { upsertFromEvent, setSessionStopSnapshot } from './session-registry.js';
 import { clearSessionNotification, sendSessionNotification } from './notify.js';
 import { summarizeTranscriptTail } from './summary.js';
 import { DaemonEvent } from './types.js';
+import { usageSnapshotFromTranscript } from './usage.js';
 
 export function runDaemon(): void {
   const socket = socketPath();
@@ -39,11 +40,13 @@ function handleEvent(event: DaemonEvent): void {
 
   if (event.type === 'session-stop') {
     const summary = summarizeTranscriptTail(event.transcriptPath ?? session.transcriptPath, loadConfig());
-    const updated = setLastSummary(event.sessionId, summary.text, summary.state) ?? session;
+    const usage = usageSnapshotFromTranscript(event.transcriptPath ?? session.transcriptPath);
+    const updated = setSessionStopSnapshot(event.sessionId, summary.text, summary.state, usage) ?? session;
     sendSessionNotification({
       ...updated,
       lastSummary: summary.text,
-      lastSummaryState: summary.state
+      lastSummaryState: summary.state,
+      lastUsage: usage
     });
   }
 }

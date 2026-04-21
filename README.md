@@ -10,6 +10,9 @@ It tracks open interactive Codex sessions, assigns each one a stable display nam
 - support only interactive Codex sessions for the MVP
 - give every active session a unique monotonic display name, unless the user provides a custom one
 - summarize the latest session state in the overlay row
+- let the user reorder the waiting queue and dismiss rows cleanly
+- show a compact view of the latest Codex rate-limit usage seen by that session
+- let the user inline-reprompt a waiting session without focusing the terminal when the terminal app supports it
 - let a click focus the original macOS terminal window when possible
 - clear the session overlay row as soon as the user prompts Codex again
 - make installation easy for the main user now and other macOS users later
@@ -108,6 +111,14 @@ codex-beacon config set overlaySummaryStyle raw
 codex-beacon config set overlaySummaryMaxWords 18
 codex-beacon config set overlaySummaryMaxChars 140
 ```
+
+The overlay now also carries:
+
+- a drag handle for queue ordering
+- a compact usage meter based on the latest transcript `token_count` snapshot
+- an inline one-line reprompt field for iTerm/iTerm2 and Terminal.app sessions
+
+Inline reprompt uses terminal-native AppleScript delivery and does not require focusing the destination terminal window first.
 
 The current focus path is strict for terminal-backed sessions:
 
