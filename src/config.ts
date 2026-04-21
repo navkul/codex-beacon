@@ -57,6 +57,10 @@ export function overlayStatePath(): string {
   return path.join(ensureAppRoot(), 'overlay-state.json');
 }
 
+export function overlaySnapshotPath(): string {
+  return path.join(ensureAppRoot(), 'overlay-snapshot.json');
+}
+
 export function loadConfig(): AppConfig {
   const file = configPath();
   if (!existsSync(file)) {

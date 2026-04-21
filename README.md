@@ -118,6 +118,8 @@ The overlay now also carries:
 - a compact usage meter based on the latest transcript `token_count` snapshot
 - an inline one-line reprompt field for iTerm/iTerm2 and Terminal.app sessions
 
+Beacon now persists the rendered overlay model in `~/.codex-beacon/overlay-snapshot.json`, so restarting the daemon/helper can repopulate current waiting sessions instead of coming back empty.
+
 Inline reprompt uses terminal-native AppleScript delivery and does not require focusing the destination terminal window first.
 
 The current focus path is strict for terminal-backed sessions:

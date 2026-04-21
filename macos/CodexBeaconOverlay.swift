@@ -61,6 +61,11 @@ struct OverlayItem {
     let repromptCommand: CommandSpec?
 }
 
+struct OverlaySnapshot: Decodable {
+    let presentation: OverlayPresentation?
+    let items: [OverlayEvent]
+}
+
 struct OverlayStateFile: Codable {
     var orderedSessionIds: [String]
 }
@@ -491,12 +496,17 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private var items: [String: OverlayItem] = [:]
     private var presentation = OverlayPresentation(width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
     private let decoder = JSONDecoder()
+    private let snapshotURL = OverlayApp.overlaySnapshotURL()
+    private var lastSnapshotRaw = ""
+    private var snapshotTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         configureStatusItem()
         configurePanel()
         refresh()
+        loadSnapshotIfNeeded()
+        startSnapshotPolling()
         readEventsFromStdin()
     }
 
@@ -506,6 +516,14 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".codex-beacon/overlay-state.json")
+    }
+
+    private static func overlaySnapshotURL() -> URL {
+        if let explicit = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_SNAPSHOT_PATH"], !explicit.isEmpty {
+            return URL(fileURLWithPath: explicit)
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".codex-beacon/overlay-snapshot.json")
     }
 
     private func configureStatusItem() {
@@ -608,6 +626,51 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }
+        }
+    }
+
+    private func startSnapshotPolling() {
+        snapshotTimer?.invalidate()
+        snapshotTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
+            self?.loadSnapshotIfNeeded()
+        }
+    }
+
+    private func loadSnapshotIfNeeded() {
+        guard let data = try? Data(contentsOf: snapshotURL),
+              let raw = String(data: data, encoding: .utf8),
+              raw != lastSnapshotRaw,
+              let snapshot = try? decoder.decode(OverlaySnapshot.self, from: data) else {
+            return
+        }
+
+        lastSnapshotRaw = raw
+        if let presentation = snapshot.presentation {
+            self.presentation = presentation
+        }
+
+        var nextItems: [String: OverlayItem] = [:]
+        for event in snapshot.items {
+            guard event.type == "show", let focusCommand = event.focusCommand else {
+                continue
+            }
+
+            nextItems[event.sessionId] = OverlayItem(
+                sessionId: event.sessionId,
+                displayName: event.displayName ?? "Codex",
+                summary: event.summary ?? "Ready for your next prompt.",
+                state: event.state ?? .ready,
+                usage: event.usage,
+                timestamp: event.timestamp ?? "",
+                focusCommand: focusCommand,
+                repromptCommand: event.repromptCommand
+            )
+        }
+
+        items = nextItems
+        refresh()
+        if !items.isEmpty {
+            showOverlay()
         }
     }
 
