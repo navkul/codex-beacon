@@ -2,7 +2,7 @@ import { ChildProcess, spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { loadConfig, overlaySnapshotPath, overlayStatePath } from './config.js';
+import { loadConfig, overlayHelperLogPath, overlaySnapshotPath, overlayStatePath } from './config.js';
 import { canRepromptSession } from './reprompt.js';
 import { SessionRecord, SessionUsageSnapshot, SummaryState } from './types.js';
 
@@ -80,12 +80,8 @@ export function clearSessionNotification(sessionId: string): void {
 }
 
 function sendOverlayEvent(event: OverlayEvent): void {
-  const overlay = ensureOverlayProcess();
-  try {
-    overlay.stdin?.write(`${JSON.stringify(event)}\n`);
-  } catch {
-    overlayProcess = undefined;
-  }
+  void event;
+  ensureOverlayProcess();
 }
 
 function ensureOverlayProcess(): ChildProcess {
@@ -95,11 +91,12 @@ function ensureOverlayProcess(): ChildProcess {
 
   const command = overlayCommand();
   const child = spawn(command, [], {
-    stdio: ['pipe', 'ignore', 'ignore'],
+    stdio: ['ignore', 'ignore', 'ignore'],
     env: {
       ...process.env,
       CODEX_BEACON_OVERLAY_STATE_PATH: overlayStatePath(),
-      CODEX_BEACON_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath()
+      CODEX_BEACON_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
+      CODEX_BEACON_OVERLAY_LOG_PATH: overlayHelperLogPath()
     }
   });
   child.on('exit', () => {
