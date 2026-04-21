@@ -70,6 +70,51 @@ struct OverlayStateFile: Codable {
     var orderedSessionIds: [String]
 }
 
+final class OverlayLogger {
+    static let shared = OverlayLogger()
+
+    private let url: URL?
+    private let queue = DispatchQueue(label: "codex-beacon.overlay.log")
+    private let formatter = ISO8601DateFormatter()
+
+    private init() {
+        if let explicit = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_LOG_PATH"], !explicit.isEmpty {
+            self.url = URL(fileURLWithPath: explicit)
+        } else {
+            self.url = nil
+        }
+    }
+
+    func log(_ message: String) {
+        guard let url else {
+            return
+        }
+
+        let line = "\(formatter.string(from: Date())) pid=\(ProcessInfo.processInfo.processIdentifier) \(message)\n"
+        guard let data = line.data(using: .utf8) else {
+            return
+        }
+
+        queue.async {
+            let directory = url.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+
+            guard let handle = try? FileHandle(forWritingTo: url) else {
+                return
+            }
+            defer {
+                try? handle.close()
+            }
+
+            handle.seekToEndOfFile()
+            handle.write(data)
+        }
+    }
+}
+
 final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -479,6 +524,7 @@ final class OverlayRowView: NSView {
 }
 
 final class OverlayApp: NSObject, NSApplicationDelegate {
+    private let logger = OverlayLogger.shared
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let panel = OverlayPanel(
         contentRect: NSRect(x: 0, y: 0, width: 384, height: 180),
@@ -500,14 +546,36 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private var lastSnapshotRaw = ""
     private var snapshotTimer: Timer?
 
+    override init() {
+        super.init()
+        bootstrapFromSnapshot()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        logger.log("applicationDidFinishLaunching activationPolicy=accessory snapshotPath=\(snapshotURL.path)")
         configureStatusItem()
         configurePanel()
         refresh()
-        loadSnapshotIfNeeded()
+        loadSnapshotIfNeeded(reason: "did-finish")
         startSnapshotPolling()
-        readEventsFromStdin()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self else {
+                return
+            }
+            self.logger.log("deferredSnapshotReload")
+            self.loadSnapshotIfNeeded(reason: "deferred")
+            if !self.items.isEmpty {
+                self.showOverlay(reason: "deferred-launch")
+            }
+        }
+    }
+
+    private func bootstrapFromSnapshot() {
+        guard let loaded = loadSnapshot() else {
+            return
+        }
+        applySnapshot(raw: loaded.raw, snapshot: loaded.snapshot, reason: "bootstrap")
     }
 
     private static func overlayStateURL() -> URL {
@@ -531,16 +599,18 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         statusItem.button?.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggleOverlay)
+        logger.log("configureStatusItem title=Beacon")
     }
 
     private func configurePanel() {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .moveToActiveSpace, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.isFloatingPanel = true
 
         backgroundView.material = .hudWindow
         backgroundView.blendingMode = .behindWindow
@@ -608,43 +678,39 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             backgroundView.bottomAnchor.constraint(equalTo: root.bottomAnchor)
         ])
         panel.contentView = root
-    }
-
-    private func readEventsFromStdin() {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            while let line = readLine() {
-                guard let data = line.data(using: .utf8) else {
-                    continue
-                }
-                if let event = try? self?.decoder.decode(OverlayEvent.self, from: data) {
-                    DispatchQueue.main.async {
-                        self?.handle(event)
-                    }
-                }
-            }
-
-            DispatchQueue.main.async {
-                NSApp.terminate(nil)
-            }
-        }
+        panel.orderOut(nil)
+        logger.log("configurePanel level=statusBar behavior=\(panel.collectionBehavior.rawValue)")
     }
 
     private func startSnapshotPolling() {
         snapshotTimer?.invalidate()
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
-            self?.loadSnapshotIfNeeded()
+            self?.loadSnapshotIfNeeded(reason: "poll")
         }
     }
 
-    private func loadSnapshotIfNeeded() {
-        guard let data = try? Data(contentsOf: snapshotURL),
-              let raw = String(data: data, encoding: .utf8),
-              raw != lastSnapshotRaw,
-              let snapshot = try? decoder.decode(OverlaySnapshot.self, from: data) else {
+    private func loadSnapshotIfNeeded(reason: String) {
+        guard let loaded = loadSnapshot() else {
             return
         }
+        applySnapshot(raw: loaded.raw, snapshot: loaded.snapshot, reason: reason)
+    }
 
+    private func loadSnapshot() -> (raw: String, snapshot: OverlaySnapshot)? {
+        guard let data = try? Data(contentsOf: snapshotURL),
+              let raw = String(data: data, encoding: .utf8),
+              let snapshot = try? decoder.decode(OverlaySnapshot.self, from: data) else {
+            return nil
+        }
+        return (raw, snapshot)
+    }
+
+    private func applySnapshot(raw: String, snapshot: OverlaySnapshot, reason: String) {
+        if raw == lastSnapshotRaw, reason != "bootstrap" {
+            return
+        }
         lastSnapshotRaw = raw
+
         if let presentation = snapshot.presentation {
             self.presentation = presentation
         }
@@ -668,41 +734,11 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
 
         items = nextItems
+        logger.log("applySnapshot reason=\(reason) items=\(items.count)")
         refresh()
         if !items.isEmpty {
-            showOverlay()
+            showOverlay(reason: reason)
         }
-    }
-
-    private func handle(_ event: OverlayEvent) {
-        if let presentation = event.presentation {
-            self.presentation = presentation
-        }
-
-        if event.type == "clear" {
-            items.removeValue(forKey: event.sessionId)
-            stateStore.remove(sessionId: event.sessionId)
-            refresh()
-            return
-        }
-
-        guard event.type == "show", let focusCommand = event.focusCommand else {
-            return
-        }
-
-        items[event.sessionId] = OverlayItem(
-            sessionId: event.sessionId,
-            displayName: event.displayName ?? "Codex",
-            summary: event.summary ?? "Ready for your next prompt.",
-            state: event.state ?? .ready,
-            usage: event.usage,
-            timestamp: event.timestamp ?? "",
-            focusCommand: focusCommand,
-            repromptCommand: event.repromptCommand
-        )
-        stateStore.insertIfNeeded(sessionId: event.sessionId)
-        refresh()
-        showOverlay()
     }
 
     private func refresh() {
@@ -715,6 +751,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
 
         guard !items.isEmpty else {
+            logger.log("refresh items=0 panel=orderOut")
             panel.orderOut(nil)
             return
         }
@@ -774,27 +811,36 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         let visibleRows = min(max(items.count, 1), max(presentation.maxVisibleRows, 1))
         let height = 58 + (CGFloat(visibleRows) * rowHeight) + 26
         let width = CGFloat(presentation.width)
-        let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let frame = targetScreen().visibleFrame
         panel.setFrame(
             NSRect(x: frame.maxX - width - 18, y: frame.maxY - height - 18, width: width, height: height),
             display: true
         )
+        logger.log("layoutPanel frame=\(NSStringFromRect(panel.frame))")
     }
 
     @objc private func toggleOverlay() {
         if panel.isVisible {
+            logger.log("toggleOverlay action=hide")
             panel.orderOut(nil)
         } else {
-            showOverlay()
+            logger.log("toggleOverlay action=show")
+            showOverlay(reason: "toggle")
         }
     }
 
-    private func showOverlay() {
+    private func showOverlay(reason: String) {
         guard !items.isEmpty else {
             return
         }
+
         layoutPanel()
+        logger.log("showOverlay reason=\(reason) visibleBefore=\(panel.isVisible)")
+        NSApp.activate(ignoringOtherApps: false)
+        panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        panel.makeFirstResponder(nil)
+        logger.log("showOverlay visibleAfter=\(panel.isVisible) key=\(panel.isKeyWindow)")
     }
 
     private func openSession(sessionId: String) {
@@ -809,6 +855,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private func dismissSession(sessionId: String) {
         items.removeValue(forKey: sessionId)
         stateStore.remove(sessionId: sessionId)
+        logger.log("dismissSession sessionId=\(sessionId) remaining=\(items.count)")
         refresh()
     }
 
@@ -854,7 +901,22 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         let movedId = sessionIds.remove(at: fromIndex)
         sessionIds.insert(movedId, at: targetIndex)
         stateStore.replace(with: sessionIds)
+        logger.log("moveSession sessionId=\(sessionId) from=\(fromIndex) to=\(targetIndex)")
         refresh()
+    }
+
+    private func targetScreen() -> NSScreen {
+        let mouseLocation = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) {
+            return screen
+        }
+        if let panelScreen = panel.screen {
+            return panelScreen
+        }
+        if let mainScreen = NSScreen.main {
+            return mainScreen
+        }
+        return NSScreen.screens[0]
     }
 
     @discardableResult
@@ -863,13 +925,16 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         process.executableURL = URL(fileURLWithPath: command.executable)
         process.arguments = command.args + extraArgs
         do {
+            logger.log("launch command=\(command.executable) args=\((command.args + extraArgs).joined(separator: " ")) wait=\(waitForExit)")
             try process.run()
             if waitForExit {
                 process.waitUntilExit()
+                logger.log("launchExit status=\(process.terminationStatus)")
                 return process.terminationStatus == 0
             }
             return true
         } catch {
+            logger.log("launchError command=\(command.executable) error=\(error.localizedDescription)")
             return false
         }
     }

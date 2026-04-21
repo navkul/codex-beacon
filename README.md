@@ -22,7 +22,7 @@ It tracks open interactive Codex sessions, assigns each one a stable display nam
 - a thin shell wrapper launches Codex and injects session metadata into the environment
 - Codex hooks emit tiny JSON events on `SessionStart`, `UserPromptSubmit`, and `Stop`
 - a background daemon receives hook events over a local Unix socket
-- the daemon updates session state and sends show/clear events to a native Swift menu-bar overlay helper
+- the daemon updates session state, persists the rendered overlay model, and ensures a native Swift menu-bar overlay helper is running
 - overlay row clicks run a local focus command that re-activates the terminal app and window
 
 The hook path should do no heavy work. It should enqueue and return.
@@ -119,6 +119,14 @@ The overlay now also carries:
 - an inline one-line reprompt field for iTerm/iTerm2 and Terminal.app sessions
 
 Beacon now persists the rendered overlay model in `~/.codex-beacon/overlay-snapshot.json`, so restarting the daemon/helper can repopulate current waiting sessions instead of coming back empty.
+
+The helper now bootstraps directly from that persisted snapshot on startup. It no longer depends on live stdin event timing to render the first visible overlay state after a restart.
+
+If you need to debug helper visibility, inspect:
+
+```bash
+tail -n 100 ~/.codex-beacon/overlay-helper.log
+```
 
 Inline reprompt uses terminal-native AppleScript delivery and does not require focusing the destination terminal window first.
 
