@@ -1,7 +1,7 @@
 import net from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 import { loadConfig, socketPath } from './config.js';
-import { upsertFromEvent, setSessionStopSnapshot } from './session-registry.js';
+import { listSessions, upsertFromEvent, setSessionStopSnapshot } from './session-registry.js';
 import { clearSessionNotification, sendSessionNotification } from './notify.js';
 import { summarizeTranscriptTail } from './summary.js';
 import { DaemonEvent } from './types.js';
@@ -28,6 +28,9 @@ export function runDaemon(): void {
   });
 
   server.listen(socket);
+  server.on('listening', () => {
+    replayWaitingSessions();
+  });
 }
 
 function handleEvent(event: DaemonEvent): void {
@@ -48,5 +51,14 @@ function handleEvent(event: DaemonEvent): void {
       lastSummaryState: summary.state,
       lastUsage: usage
     });
+  }
+}
+
+function replayWaitingSessions(): void {
+  for (const session of listSessions()) {
+    if (session.status !== 'waiting') {
+      continue;
+    }
+    sendSessionNotification(session);
   }
 }

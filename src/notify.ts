@@ -1,8 +1,8 @@
 import { ChildProcess, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { loadConfig, overlayStatePath } from './config.js';
+import { loadConfig, overlaySnapshotPath, overlayStatePath } from './config.js';
 import { canRepromptSession } from './reprompt.js';
 import { SessionRecord, SessionUsageSnapshot, SummaryState } from './types.js';
 
@@ -31,6 +31,11 @@ interface OverlayPresentation {
   summaryMaxLines: number;
 }
 
+interface OverlaySnapshot {
+  presentation: OverlayPresentation | null;
+  items: OverlayEvent[];
+}
+
 let overlayProcess: ChildProcess | undefined;
 
 function truncate(text: string, limit: number): string {
@@ -43,7 +48,7 @@ function truncate(text: string, limit: number): string {
 export function sendSessionNotification(session: SessionRecord): void {
   const config = loadConfig();
   const message = truncate(session.lastSummary ?? 'Ready for your next prompt.', config.overlaySummaryMaxChars);
-  sendOverlayEvent({
+  const event: OverlayEvent = {
     type: 'show',
     sessionId: session.sessionId,
     displayName: session.displayName,
@@ -59,15 +64,19 @@ export function sendSessionNotification(session: SessionRecord): void {
       summaryVisible: config.overlayShowSummary,
       summaryMaxLines: config.overlaySummaryMaxLines
     }
-  });
+  };
+  updateOverlaySnapshot(event);
+  sendOverlayEvent(event);
 }
 
 export function clearSessionNotification(sessionId: string): void {
-  sendOverlayEvent({
+  const event: OverlayEvent = {
     type: 'clear',
     sessionId,
     timestamp: new Date().toISOString()
-  });
+  };
+  updateOverlaySnapshot(event);
+  sendOverlayEvent(event);
 }
 
 function sendOverlayEvent(event: OverlayEvent): void {
@@ -89,7 +98,8 @@ function ensureOverlayProcess(): ChildProcess {
     stdio: ['pipe', 'ignore', 'ignore'],
     env: {
       ...process.env,
-      CODEX_BEACON_OVERLAY_STATE_PATH: overlayStatePath()
+      CODEX_BEACON_OVERLAY_STATE_PATH: overlayStatePath(),
+      CODEX_BEACON_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath()
     }
   });
   child.on('exit', () => {
@@ -100,6 +110,41 @@ function ensureOverlayProcess(): ChildProcess {
   });
   overlayProcess = child;
   return child;
+}
+
+function updateOverlaySnapshot(event: OverlayEvent): void {
+  const snapshot = loadOverlaySnapshot();
+  if (event.presentation) {
+    snapshot.presentation = event.presentation;
+  }
+
+  if (event.type === 'clear') {
+    snapshot.items = snapshot.items.filter((item) => item.sessionId !== event.sessionId);
+  } else {
+    snapshot.items = snapshot.items.filter((item) => item.sessionId !== event.sessionId);
+    snapshot.items.unshift(event);
+  }
+
+  writeFileSync(overlaySnapshotPath(), JSON.stringify(snapshot, null, 2));
+}
+
+function loadOverlaySnapshot(): OverlaySnapshot {
+  const file = overlaySnapshotPath();
+  if (!existsSync(file)) {
+    return {
+      presentation: null,
+      items: []
+    };
+  }
+
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as OverlaySnapshot;
+  } catch {
+    return {
+      presentation: null,
+      items: []
+    };
+  }
 }
 
 function overlayCommand(): string {
