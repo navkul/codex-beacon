@@ -171,107 +171,6 @@ final class OverlayStateStore {
     }
 }
 
-final class UsageMeterView: NSView {
-    private let usage: SessionUsageSnapshot
-
-    init(usage: SessionUsageSnapshot) {
-        self.usage = usage
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        toolTip = usageTooltip(usage)
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 56),
-            heightAnchor.constraint(equalToConstant: 18)
-        ])
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override var isFlipped: Bool {
-        true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-
-        guard let context = NSGraphicsContext.current?.cgContext else {
-            return
-        }
-
-        let primaryPercent = clamp(usage.primary?.usedPercent ?? 0)
-        let secondaryPercent = clamp(usage.secondary?.usedPercent ?? 0)
-        let primaryTrackRect = CGRect(x: 0, y: 1, width: 38, height: 10)
-        let batteryTipRect = CGRect(x: 40, y: 3.5, width: 3, height: 5)
-        let weeklyTrackRect = CGRect(x: 0, y: 14, width: 43, height: 2)
-
-        context.setFillColor(NSColor.white.withAlphaComponent(0.08).cgColor)
-        context.addPath(NSBezierPath(roundedRect: primaryTrackRect, xRadius: 5, yRadius: 5).cgPath)
-        context.fillPath()
-        context.setStrokeColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-        context.setLineWidth(1)
-        context.addPath(NSBezierPath(roundedRect: primaryTrackRect, xRadius: 5, yRadius: 5).cgPath)
-        context.strokePath()
-
-        let fillWidth = max(5, (primaryTrackRect.width - 2) * primaryPercent)
-        let primaryFillRect = CGRect(
-            x: primaryTrackRect.minX + 1,
-            y: primaryTrackRect.minY + 1,
-            width: min(primaryTrackRect.width - 2, fillWidth),
-            height: primaryTrackRect.height - 2
-        )
-        context.setFillColor(meterColor(primaryPercent).cgColor)
-        context.addPath(NSBezierPath(roundedRect: primaryFillRect, xRadius: 4, yRadius: 4).cgPath)
-        context.fillPath()
-
-        context.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-        context.fill(batteryTipRect)
-
-        context.setFillColor(NSColor.white.withAlphaComponent(0.08).cgColor)
-        context.addPath(NSBezierPath(roundedRect: weeklyTrackRect, xRadius: 1, yRadius: 1).cgPath)
-        context.fillPath()
-        let secondaryFillRect = CGRect(
-            x: weeklyTrackRect.minX,
-            y: weeklyTrackRect.minY,
-            width: weeklyTrackRect.width * secondaryPercent,
-            height: weeklyTrackRect.height
-        )
-        context.setFillColor(NSColor.white.withAlphaComponent(0.46).cgColor)
-        context.addPath(NSBezierPath(roundedRect: secondaryFillRect, xRadius: 1, yRadius: 1).cgPath)
-        context.fillPath()
-
-        let percentText = String(format: "%.0f%%", usage.primary?.usedPercent ?? 0)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 10, weight: .medium),
-            .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.86)
-        ]
-        percentText.draw(at: CGPoint(x: 45, y: 0), withAttributes: attributes)
-    }
-
-    private func clamp(_ value: Double) -> CGFloat {
-        CGFloat(max(0, min(100, value)) / 100)
-    }
-
-    private func meterColor(_ ratio: CGFloat) -> NSColor {
-        switch ratio {
-        case 0.9...:
-            return NSColor(calibratedRed: 0.92, green: 0.54, blue: 0.54, alpha: 0.9)
-        case 0.75...:
-            return NSColor(calibratedRed: 0.92, green: 0.76, blue: 0.54, alpha: 0.9)
-        default:
-            return NSColor(calibratedWhite: 0.88, alpha: 0.78)
-        }
-    }
-
-    private func usageTooltip(_ usage: SessionUsageSnapshot) -> String {
-        let primary = usage.primary.map { "5h \((Int($0.usedPercent)))%" } ?? "5h unavailable"
-        let secondary = usage.secondary.map { "week \((Int($0.usedPercent)))%" } ?? "week unavailable"
-        return "\(primary) · \(secondary)"
-    }
-}
-
 final class OverlayRowView: NSView {
     let sessionId: String
 
@@ -337,9 +236,6 @@ final class OverlayRowView: NSView {
         topRow.addArrangedSubview(dot)
         topRow.addArrangedSubview(title)
         topRow.addArrangedSubview(spacer())
-        if let usage = item.usage {
-            topRow.addArrangedSubview(UsageMeterView(usage: usage))
-        }
         topRow.addArrangedSubview(dismissButton)
 
         let summary = label(item.summary, size: 12, color: NSColor.secondaryLabelColor.withAlphaComponent(0.94), weight: .regular)
@@ -530,6 +426,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let backgroundView = FlippedView()
     private let headerTitle = NSTextField(labelWithString: "Codex Beacon")
     private let headerSubtitle = NSTextField(labelWithString: "No waiting sessions")
+    private let headerUsagePrimary = NSTextField(labelWithString: "")
+    private let headerUsageSecondary = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView()
     private let rowsContainer = FlippedView(frame: .zero)
     private let stateStore = OverlayStateStore(url: OverlayApp.overlayStateURL())
@@ -648,6 +546,26 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerSubtitle.isEditable = false
         headerSubtitle.isSelectable = false
 
+        headerUsagePrimary.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        headerUsagePrimary.textColor = NSColor.labelColor.withAlphaComponent(0.88)
+        headerUsagePrimary.alignment = .right
+        headerUsagePrimary.isBezeled = false
+        headerUsagePrimary.isBordered = false
+        headerUsagePrimary.drawsBackground = false
+        headerUsagePrimary.isEditable = false
+        headerUsagePrimary.isSelectable = false
+        headerUsagePrimary.lineBreakMode = .byTruncatingHead
+
+        headerUsageSecondary.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        headerUsageSecondary.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.92)
+        headerUsageSecondary.alignment = .right
+        headerUsageSecondary.isBezeled = false
+        headerUsageSecondary.isBordered = false
+        headerUsageSecondary.drawsBackground = false
+        headerUsageSecondary.isEditable = false
+        headerUsageSecondary.isSelectable = false
+        headerUsageSecondary.lineBreakMode = .byTruncatingHead
+
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
@@ -661,6 +579,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
         backgroundView.addSubview(headerTitle)
         backgroundView.addSubview(headerSubtitle)
+        backgroundView.addSubview(headerUsagePrimary)
+        backgroundView.addSubview(headerUsageSecondary)
         backgroundView.addSubview(scrollView)
 
         rootView.subviews.forEach { $0.removeFromSuperview() }
@@ -753,6 +673,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         logger.log("refresh start items=\(items.count)")
         updateStatusItem()
         headerSubtitle.stringValue = items.isEmpty ? "No waiting sessions" : "\(items.count) waiting"
+        updateHeaderUsage()
 
         guard !items.isEmpty else {
             logger.log("refresh items=0 window=orderOut")
@@ -825,13 +746,17 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private func layoutPanel() {
         let rowHeight: CGFloat = presentation.summaryVisible ? 112 : 86
         let visibleRows = min(max(items.count, 1), max(presentation.maxVisibleRows, 1))
-        let height = 58 + (CGFloat(visibleRows) * rowHeight) + 26
+        let height = 72 + (CGFloat(visibleRows) * rowHeight) + 24
         let width = CGFloat(presentation.width)
+        let usageWidth: CGFloat = 214
+        let leftWidth = max(132, width - usageWidth - 54)
         rootView.frame = NSRect(x: 0, y: 0, width: width, height: height)
         backgroundView.frame = rootView.bounds
-        headerTitle.frame = NSRect(x: 20, y: 16, width: width - 40, height: 18)
-        headerSubtitle.frame = NSRect(x: 20, y: 34, width: width - 40, height: 14)
-        scrollView.frame = NSRect(x: 16, y: 58, width: width - 28, height: height - 74)
+        headerTitle.frame = NSRect(x: 20, y: 14, width: leftWidth, height: 17)
+        headerSubtitle.frame = NSRect(x: 20, y: 33, width: leftWidth, height: 14)
+        headerUsagePrimary.frame = NSRect(x: width - usageWidth - 20, y: 14, width: usageWidth, height: 14)
+        headerUsageSecondary.frame = NSRect(x: width - usageWidth - 20, y: 31, width: usageWidth, height: 14)
+        scrollView.frame = NSRect(x: 16, y: 66, width: width - 28, height: height - 82)
         guard let window = overlayWindow else {
             logger.log("layoutPanel missingWindow=true")
             return
@@ -851,6 +776,60 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             window.setFrame(NSRect(x: 0, y: 0, width: width, height: height), display: true)
         }
         logger.log("layoutPanel frame=\(NSStringFromRect(window.frame))")
+    }
+
+    private func updateHeaderUsage() {
+        guard let usage = latestUsageSnapshot() else {
+            headerUsagePrimary.stringValue = ""
+            headerUsageSecondary.stringValue = ""
+            return
+        }
+
+        headerUsagePrimary.stringValue = usageHeaderLine(label: "5h", snapshot: usage.primary) ?? ""
+        headerUsageSecondary.stringValue = usageHeaderLine(label: "wk", snapshot: usage.secondary) ?? ""
+    }
+
+    private func latestUsageSnapshot() -> SessionUsageSnapshot? {
+        items.values
+            .compactMap(\.usage)
+            .max { left, right in
+                let leftKey = left.capturedAt ?? ""
+                let rightKey = right.capturedAt ?? ""
+                return leftKey < rightKey
+            }
+    }
+
+    private func usageHeaderLine(label: String, snapshot: UsageWindowSnapshot?) -> String? {
+        guard let snapshot else {
+            return nil
+        }
+
+        let percentLeft = max(0, min(100, Int((100 - snapshot.usedPercent).rounded())))
+        if let resetText = resetText(from: snapshot.resetsAt) {
+            return "\(label) \(percentLeft)% left  \(resetText)"
+        }
+        return "\(label) \(percentLeft)% left"
+    }
+
+    private func resetText(from timestamp: Double?) -> String? {
+        guard let timestamp else {
+            return nil
+        }
+
+        let resetDate = Date(timeIntervalSince1970: timestamp)
+        let calendar = Calendar.current
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        timeFormatter.dateFormat = "HH:mm"
+
+        if calendar.isDateInToday(resetDate) {
+            return timeFormatter.string(from: resetDate)
+        }
+
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dateFormatter.dateFormat = "d MMM HH:mm"
+        return dateFormatter.string(from: resetDate)
     }
 
     private func currentScreenVisibleFrame() -> NSRect? {
