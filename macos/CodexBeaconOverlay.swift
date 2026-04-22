@@ -478,6 +478,12 @@ final class OverlayRowView: NSView {
 }
 
 final class OverlayApp: NSObject, NSApplicationDelegate {
+    private enum LayoutMetrics {
+        static let headerHeight: CGFloat = 66
+        static let footerHeight: CGFloat = 16
+        static let rowSpacing: CGFloat = 10
+    }
+
     private let logger = OverlayLogger.shared
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var overlayWindow: NSWindow?
@@ -497,6 +503,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private var lastSnapshotRaw = ""
     private var snapshotTimer: Timer?
     private let showOnLaunch = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_SHOW_ON_LAUNCH"] == "1"
+    private var visibleRowsContentHeight: CGFloat = 1
 
     override init() {
         super.init()
@@ -745,8 +752,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
 
         let rowWidth = CGFloat(presentation.width) - 32
-        let rowHeight: CGFloat = presentation.summaryVisible ? 112 : 86
         var y: CGFloat = 0
+        var rowHeights: [CGFloat] = []
 
         for item in orderedItems() {
             let row = OverlayRowView(
@@ -765,14 +772,22 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                     self?.moveSession(sessionId: sessionId, to: point)
                 }
             )
+            let rowHeight = measuredRowHeight(for: row, width: rowWidth)
             row.translatesAutoresizingMaskIntoConstraints = true
             row.frame = NSRect(x: 0, y: y, width: rowWidth, height: rowHeight)
             rowsContainer.addSubview(row)
-            y += rowHeight + 10
+            rowHeights.append(rowHeight)
+            y += rowHeight + LayoutMetrics.rowSpacing
         }
 
         scrollView.verticalScroller?.alphaValue = items.count > presentation.maxVisibleRows ? 1 : 0
-        rowsContainer.frame = NSRect(x: 0, y: 0, width: rowWidth, height: max(1, y - 10))
+        visibleRowsContentHeight = contentHeight(for: rowHeights, visibleCount: presentation.maxVisibleRows)
+        rowsContainer.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: rowWidth,
+            height: max(1, contentHeight(for: rowHeights, visibleCount: rowHeights.count))
+        )
         layoutPanel()
         logger.log("refresh end arranged=\(rowsContainer.subviews.count)")
     }
@@ -803,9 +818,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func layoutPanel() {
-        let rowHeight: CGFloat = presentation.summaryVisible ? 112 : 86
-        let visibleRows = min(max(items.count, 1), max(presentation.maxVisibleRows, 1))
-        let height = 72 + (CGFloat(visibleRows) * rowHeight) + 24
+        let height = LayoutMetrics.headerHeight + max(visibleRowsContentHeight, 1) + LayoutMetrics.footerHeight
         let width = CGFloat(presentation.width)
         let usageWidth: CGFloat = 214
         let leftWidth = max(132, width - usageWidth - 54)
@@ -835,6 +848,24 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             window.setFrame(NSRect(x: 0, y: 0, width: width, height: height), display: true)
         }
         logger.log("layoutPanel frame=\(NSStringFromRect(window.frame))")
+    }
+
+    private func measuredRowHeight(for row: OverlayRowView, width: CGFloat) -> CGFloat {
+        row.frame = NSRect(x: 0, y: 0, width: width, height: 1)
+        row.needsLayout = true
+        row.layoutSubtreeIfNeeded()
+        return max(1, ceil(row.fittingSize.height))
+    }
+
+    private func contentHeight(for rowHeights: [CGFloat], visibleCount: Int) -> CGFloat {
+        let clampedCount = max(0, min(rowHeights.count, visibleCount))
+        guard clampedCount > 0 else {
+            return 1
+        }
+
+        let visibleHeights = rowHeights.prefix(clampedCount)
+        let spacing = CGFloat(max(clampedCount - 1, 0)) * LayoutMetrics.rowSpacing
+        return visibleHeights.reduce(0, +) + spacing
     }
 
     private func updateHeaderUsage() {
