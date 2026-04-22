@@ -525,12 +525,7 @@ final class OverlayRowView: NSView {
 final class OverlayApp: NSObject, NSApplicationDelegate {
     private let logger = OverlayLogger.shared
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let overlayWindow = NSWindow(
-        contentRect: NSRect(x: 0, y: 0, width: 384, height: 180),
-        styleMask: [.borderless],
-        backing: .buffered,
-        defer: false
-    )
+    private var overlayWindow: NSWindow?
     private let rootView = FlippedView(frame: NSRect(x: 0, y: 0, width: 384, height: 180))
     private let backgroundView = NSView()
     private let headerTitle = NSTextField(labelWithString: "Codex Beacon")
@@ -554,11 +549,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         logger.log("applicationDidFinishLaunching activationPolicy=accessory snapshotPath=\(snapshotURL.path)")
         configureStatusItem()
-        logger.log("applicationDidFinishLaunching step=status-item")
         configurePanel()
-        logger.log("applicationDidFinishLaunching step=window")
         loadSnapshotIfNeeded(reason: "did-finish", allowSameRaw: true)
-        logger.log("applicationDidFinishLaunching step=did-finish-load")
         startSnapshotPolling()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else {
@@ -610,15 +602,22 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func configurePanel() {
-        logger.log("configurePanel step=begin")
+        logger.log("configurePanel begin")
 
-        overlayWindow.isOpaque = false
-        overlayWindow.backgroundColor = .clear
-        overlayWindow.hasShadow = true
-        overlayWindow.level = .statusBar
-        overlayWindow.collectionBehavior = [.canJoinAllSpaces, .moveToActiveSpace, .fullScreenAuxiliary]
-        overlayWindow.ignoresMouseEvents = false
-        overlayWindow.isReleasedWhenClosed = false
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 384, height: 180),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        overlayWindow = window
+
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .statusBar
+        window.ignoresMouseEvents = false
+        window.isReleasedWhenClosed = false
 
         rootView.wantsLayer = true
         rootView.frame = NSRect(x: 0, y: 0, width: presentation.width, height: 180)
@@ -665,9 +664,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
         rootView.subviews.forEach { $0.removeFromSuperview() }
         rootView.addSubview(backgroundView)
-        overlayWindow.contentView = rootView
-        overlayWindow.orderOut(nil)
-        logger.log("configurePanel step=end")
+        window.contentView = rootView
+        window.orderOut(nil)
+        logger.log("configurePanel end")
     }
 
     private func startSnapshotPolling() {
@@ -750,7 +749,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
         guard !items.isEmpty else {
             logger.log("refresh items=0 window=orderOut")
-            overlayWindow.orderOut(nil)
+            overlayWindow?.orderOut(nil)
             return
         }
 
@@ -826,10 +825,15 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerTitle.frame = NSRect(x: 20, y: 16, width: width - 40, height: 18)
         headerSubtitle.frame = NSRect(x: 20, y: 34, width: width - 40, height: 14)
         scrollView.frame = NSRect(x: 16, y: 58, width: width - 28, height: height - 74)
+        guard let window = overlayWindow else {
+            logger.log("layoutPanel missingWindow=true")
+            return
+        }
+
         if let button = statusItem.button, let buttonWindow = button.window {
             let buttonRectInWindow = button.convert(button.bounds, to: nil)
             let buttonRectOnScreen = buttonWindow.convertToScreen(buttonRectInWindow)
-            overlayWindow.setFrame(
+            window.setFrame(
                 NSRect(
                     x: buttonRectOnScreen.maxX - width,
                     y: buttonRectOnScreen.minY - height - 6,
@@ -839,15 +843,20 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 display: true
             )
         } else {
-            overlayWindow.setFrame(NSRect(x: 0, y: 0, width: width, height: height), display: true)
+            window.setFrame(NSRect(x: 0, y: 0, width: width, height: height), display: true)
         }
-        logger.log("layoutPanel frame=\(NSStringFromRect(overlayWindow.frame))")
+        logger.log("layoutPanel frame=\(NSStringFromRect(window.frame))")
     }
 
     @objc private func toggleOverlay() {
-        if overlayWindow.isVisible {
+        guard let window = overlayWindow else {
+            logger.log("toggleOverlay missingWindow=true")
+            return
+        }
+
+        if window.isVisible {
             logger.log("toggleOverlay action=hide")
-            overlayWindow.orderOut(nil)
+            window.orderOut(nil)
         } else {
             logger.log("toggleOverlay action=show")
             showOverlay(reason: "toggle")
@@ -858,13 +867,17 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         guard !items.isEmpty else {
             return
         }
+        guard let window = overlayWindow else {
+            logger.log("showOverlay reason=\(reason) missingWindow=true")
+            return
+        }
 
         layoutPanel()
-        logger.log("showOverlay reason=\(reason) visibleBefore=\(overlayWindow.isVisible)")
+        logger.log("showOverlay reason=\(reason) visibleBefore=\(window.isVisible)")
         NSApp.activate(ignoringOtherApps: false)
-        overlayWindow.makeKeyAndOrderFront(nil)
-        overlayWindow.orderFrontRegardless()
-        logger.log("showOverlay visibleAfter=\(overlayWindow.isVisible)")
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        logger.log("showOverlay visibleAfter=\(window.isVisible)")
     }
 
     private func openSession(sessionId: String) {
@@ -873,7 +886,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
         launch(item.focusCommand)
         dismissSession(sessionId: sessionId)
-        overlayWindow.orderOut(nil)
+        overlayWindow?.orderOut(nil)
     }
 
     private func dismissSession(sessionId: String) {
