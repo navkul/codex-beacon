@@ -176,6 +176,20 @@ final class OverlayStateStore {
 }
 
 final class OverlayRowView: NSView {
+    private enum Metrics {
+        static let horizontalInset: CGFloat = 16
+        static let verticalInset: CGFloat = 14
+        static let contentSpacing: CGFloat = 8
+        static let titleSpacing: CGFloat = 8
+        static let actionSpacing: CGFloat = 6
+        static let actionButtonSize: CGFloat = 16
+        static let contentToActionsGap: CGFloat = 14
+        static let dotSize: CGFloat = 6
+        static let summaryMinHeight: CGFloat = 16
+        static let repromptHeight: CGFloat = 18
+        static let underlineTop: CGFloat = 5
+    }
+
     let sessionId: String
 
     private let openAction: (String) -> Void
@@ -219,12 +233,14 @@ final class OverlayRowView: NSView {
         let title = label(item.displayName, size: 13, color: NSColor.labelColor.withAlphaComponent(0.95), weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
 
+        let actionTint = NSColor.tertiaryLabelColor.withAlphaComponent(0.88)
+
         let dismissButton = subtleIconButton(
             systemName: "xmark",
             description: "Dismiss",
             action: #selector(dismissRow(_:)),
             sessionId: item.sessionId,
-            tintColor: NSColor.tertiaryLabelColor.withAlphaComponent(0.88)
+            tintColor: actionTint
         )
 
         let openButton = subtleIconButton(
@@ -232,29 +248,42 @@ final class OverlayRowView: NSView {
             description: "Open session",
             action: #selector(openRow(_:)),
             sessionId: item.sessionId,
-            tintColor: NSColor.controlAccentColor.withAlphaComponent(0.96)
+            tintColor: actionTint
         )
 
         actionButtonsStack.orientation = .vertical
         actionButtonsStack.alignment = .centerX
-        actionButtonsStack.spacing = 8
+        actionButtonsStack.spacing = Metrics.actionSpacing
         actionButtonsStack.translatesAutoresizingMaskIntoConstraints = false
+        actionButtonsStack.setContentCompressionResistancePriority(.required, for: .vertical)
+        actionButtonsStack.setContentHuggingPriority(.required, for: .vertical)
         actionButtonsStack.addArrangedSubview(dismissButton)
         actionButtonsStack.addArrangedSubview(openButton)
 
-        let topRow = NSStackView()
-        topRow.orientation = .horizontal
-        topRow.alignment = .top
-        topRow.spacing = 8
-        topRow.translatesAutoresizingMaskIntoConstraints = false
-        topRow.addArrangedSubview(title)
-        topRow.addArrangedSubview(dot)
-        topRow.addArrangedSubview(spacer())
-        topRow.addArrangedSubview(actionButtonsStack)
+        let titleRow = NSStackView()
+        titleRow.orientation = .horizontal
+        titleRow.alignment = .centerY
+        titleRow.spacing = Metrics.titleSpacing
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+        titleRow.setContentCompressionResistancePriority(.required, for: .vertical)
+        titleRow.setContentHuggingPriority(.required, for: .vertical)
+        titleRow.addArrangedSubview(title)
+        titleRow.addArrangedSubview(dot)
 
-        let summary = label(item.summary, size: 11, color: NSColor.secondaryLabelColor.withAlphaComponent(0.94), weight: .medium)
+        let summary = NSTextField(wrappingLabelWithString: item.summary)
+        summary.font = overlayFont(size: 11, weight: .medium)
+        summary.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.94)
+        summary.translatesAutoresizingMaskIntoConstraints = false
         summary.lineBreakMode = .byTruncatingTail
         summary.maximumNumberOfLines = presentation.summaryMaxLines
+        summary.cell?.wraps = true
+        summary.cell?.usesSingleLineMode = false
+        summary.cell?.truncatesLastVisibleLine = true
+        summary.setContentCompressionResistancePriority(.required, for: .vertical)
+        summary.setContentHuggingPriority(.required, for: .vertical)
+
+        let contentColumn = NSView()
+        contentColumn.translatesAutoresizingMaskIntoConstraints = false
 
         repromptContainer.translatesAutoresizingMaskIntoConstraints = false
 
@@ -283,33 +312,45 @@ final class OverlayRowView: NSView {
         let bodyStack = NSStackView()
         bodyStack.orientation = .vertical
         bodyStack.alignment = .leading
-        bodyStack.spacing = 8
+        bodyStack.spacing = Metrics.contentSpacing
         bodyStack.translatesAutoresizingMaskIntoConstraints = false
-        bodyStack.addArrangedSubview(topRow)
+        bodyStack.addArrangedSubview(titleRow)
         if presentation.summaryVisible {
             bodyStack.addArrangedSubview(summary)
         }
         bodyStack.addArrangedSubview(repromptContainer)
 
-        addSubview(bodyStack)
+        addSubview(contentColumn)
+        contentColumn.addSubview(bodyStack)
+        addSubview(actionButtonsStack)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: CGFloat(presentation.width) - 32),
-            dot.widthAnchor.constraint(equalToConstant: 6),
-            dot.heightAnchor.constraint(equalToConstant: 6),
-            bodyStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            bodyStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            bodyStack.topAnchor.constraint(equalTo: topAnchor, constant: 14),
-            bodyStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
-            repromptContainer.widthAnchor.constraint(equalTo: bodyStack.widthAnchor),
+            dot.widthAnchor.constraint(equalToConstant: Metrics.dotSize),
+            dot.heightAnchor.constraint(equalToConstant: Metrics.dotSize),
+            title.widthAnchor.constraint(lessThanOrEqualTo: contentColumn.widthAnchor),
+            summary.widthAnchor.constraint(equalTo: contentColumn.widthAnchor),
+            summary.heightAnchor.constraint(greaterThanOrEqualToConstant: Metrics.summaryMinHeight),
+            contentColumn.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.horizontalInset),
+            contentColumn.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.verticalInset),
+            contentColumn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.verticalInset),
+            contentColumn.trailingAnchor.constraint(equalTo: actionButtonsStack.leadingAnchor, constant: -Metrics.contentToActionsGap),
+            bodyStack.leadingAnchor.constraint(equalTo: contentColumn.leadingAnchor),
+            bodyStack.trailingAnchor.constraint(equalTo: contentColumn.trailingAnchor),
+            bodyStack.topAnchor.constraint(equalTo: contentColumn.topAnchor),
+            bodyStack.bottomAnchor.constraint(equalTo: contentColumn.bottomAnchor),
+            repromptContainer.widthAnchor.constraint(equalTo: contentColumn.widthAnchor),
             repromptField.leadingAnchor.constraint(equalTo: repromptContainer.leadingAnchor),
             repromptField.trailingAnchor.constraint(equalTo: repromptContainer.trailingAnchor),
             repromptField.topAnchor.constraint(equalTo: repromptContainer.topAnchor),
             underline.leadingAnchor.constraint(equalTo: repromptContainer.leadingAnchor),
             underline.trailingAnchor.constraint(equalTo: repromptContainer.trailingAnchor),
-            underline.topAnchor.constraint(equalTo: repromptField.bottomAnchor, constant: 5),
+            underline.topAnchor.constraint(equalTo: repromptField.bottomAnchor, constant: Metrics.underlineTop),
             underline.heightAnchor.constraint(equalToConstant: 1),
             underline.bottomAnchor.constraint(equalTo: repromptContainer.bottomAnchor),
-            repromptField.heightAnchor.constraint(equalToConstant: 18)
+            repromptField.heightAnchor.constraint(equalToConstant: Metrics.repromptHeight),
+            actionButtonsStack.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.verticalInset),
+            actionButtonsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
+            actionButtonsStack.widthAnchor.constraint(equalToConstant: Metrics.actionButtonSize)
         ])
     }
 
@@ -390,24 +431,21 @@ final class OverlayRowView: NSView {
         return field
     }
 
-    private func spacer() -> NSView {
-        let view = NSView()
-        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return view
-    }
-
     private func subtleIconButton(systemName: String, description: String, action: Selector, sessionId: String, tintColor: NSColor) -> NSButton {
         let button = NSButton(title: "", target: self, action: action)
         button.identifier = NSUserInterfaceItemIdentifier(sessionId)
         button.isBordered = false
         button.bezelStyle = .shadowlessSquare
-        button.image = NSImage(systemSymbolName: systemName, accessibilityDescription: description)
+        button.image = NSImage(
+            systemSymbolName: systemName,
+            accessibilityDescription: description
+        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
         button.contentTintColor = tintColor
         button.imageScaling = .scaleProportionallyDown
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 14),
-            button.heightAnchor.constraint(equalToConstant: 14)
+            button.widthAnchor.constraint(equalToConstant: Metrics.actionButtonSize),
+            button.heightAnchor.constraint(equalToConstant: Metrics.actionButtonSize)
         ])
         return button
     }
