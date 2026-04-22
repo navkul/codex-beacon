@@ -872,12 +872,13 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return
         }
 
+        window.collectionBehavior = [.canJoinAllSpaces]
         layoutPanel()
-        logger.log("showOverlay reason=\(reason) visibleBefore=\(window.isVisible)")
+        logger.log("showOverlay reason=\(reason) visibleBefore=\(window.isVisible) activeSpaceBefore=\(window.isOnActiveSpace)")
         NSApp.activate(ignoringOtherApps: false)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
-        logger.log("showOverlay visibleAfter=\(window.isVisible)")
+        logger.log("showOverlay visibleAfter=\(window.isVisible) activeSpaceAfter=\(window.isOnActiveSpace)")
     }
 
     private func openSession(sessionId: String) {
