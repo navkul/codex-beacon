@@ -178,16 +178,17 @@ final class OverlayStateStore {
 final class OverlayRowView: NSView {
     private enum Metrics {
         static let horizontalInset: CGFloat = 16
-        static let verticalInset: CGFloat = 14
-        static let contentSpacing: CGFloat = 8
+        static let topInset: CGFloat = 12
+        static let bottomInset: CGFloat = 12
+        static let contentSpacing: CGFloat = 7
         static let titleSpacing: CGFloat = 8
         static let actionSpacing: CGFloat = 6
         static let actionButtonSize: CGFloat = 16
         static let contentToActionsGap: CGFloat = 14
         static let dotSize: CGFloat = 6
         static let summaryMinHeight: CGFloat = 16
-        static let repromptHeight: CGFloat = 18
-        static let underlineTop: CGFloat = 5
+        static let repromptHeight: CGFloat = 16
+        static let underlineTop: CGFloat = 4
     }
 
     let sessionId: String
@@ -331,8 +332,8 @@ final class OverlayRowView: NSView {
             summary.widthAnchor.constraint(equalTo: contentColumn.widthAnchor),
             summary.heightAnchor.constraint(greaterThanOrEqualToConstant: Metrics.summaryMinHeight),
             contentColumn.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.horizontalInset),
-            contentColumn.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.verticalInset),
-            contentColumn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.verticalInset),
+            contentColumn.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.topInset),
+            contentColumn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.bottomInset),
             contentColumn.trailingAnchor.constraint(equalTo: actionButtonsStack.leadingAnchor, constant: -Metrics.contentToActionsGap),
             bodyStack.leadingAnchor.constraint(equalTo: contentColumn.leadingAnchor),
             bodyStack.trailingAnchor.constraint(equalTo: contentColumn.trailingAnchor),
@@ -348,7 +349,7 @@ final class OverlayRowView: NSView {
             underline.heightAnchor.constraint(equalToConstant: 1),
             underline.bottomAnchor.constraint(equalTo: repromptContainer.bottomAnchor),
             repromptField.heightAnchor.constraint(equalToConstant: Metrics.repromptHeight),
-            actionButtonsStack.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.verticalInset),
+            actionButtonsStack.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.topInset),
             actionButtonsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
             actionButtonsStack.widthAnchor.constraint(equalToConstant: Metrics.actionButtonSize)
         ])

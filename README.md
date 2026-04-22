@@ -152,6 +152,8 @@ Rows now use explicit trailing controls instead of full-row focus:
 
 Rows are still reorderable, but dragging now works from the row body rather than from a dedicated handle icon. The status dot now sits to the right of the session name, and the row layout uses separate content and action columns so summaries can use the available width before wrapping.
 
+The row metric system has also been tightened so the title block and reprompt footer sit in a denser, more even vertical frame instead of leaving extra slack at the bottom of the card.
+
 If you need to debug helper visibility, inspect:
 
 ```bash
