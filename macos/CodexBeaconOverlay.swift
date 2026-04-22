@@ -527,7 +527,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var overlayWindow: NSWindow?
     private let rootView = FlippedView(frame: NSRect(x: 0, y: 0, width: 384, height: 180))
-    private let backgroundView = NSView()
+    private let backgroundView = FlippedView()
     private let headerTitle = NSTextField(labelWithString: "Codex Beacon")
     private let headerSubtitle = NSTextField(labelWithString: "No waiting sessions")
     private let scrollView = NSScrollView()
@@ -539,6 +539,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let snapshotURL = OverlayApp.overlaySnapshotURL()
     private var lastSnapshotRaw = ""
     private var snapshotTimer: Timer?
+    private let showOnLaunch = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_SHOW_ON_LAUNCH"] == "1"
 
     override init() {
         super.init()
@@ -558,7 +559,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             }
             self.logger.log("deferredSnapshotReload")
             self.loadSnapshotIfNeeded(reason: "deferred", allowSameRaw: true)
-            if !self.items.isEmpty {
+            if self.showOnLaunch, !self.items.isEmpty {
                 self.showOverlay(reason: "deferred-launch")
             }
         }
@@ -714,6 +715,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             self.presentation = presentation
         }
 
+        let previousIds = Set(items.keys)
         var nextItems: [String: OverlayItem] = [:]
         for event in snapshot.items {
             guard event.type == "show", let focusCommand = event.focusCommand else {
@@ -732,12 +734,17 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             )
         }
 
+        let nextIds = Set(nextItems.keys)
+        let addedIds = nextIds.subtracting(previousIds)
+        let removedIds = previousIds.subtracting(nextIds)
         items = nextItems
-        logger.log("applySnapshot reason=\(reason) items=\(items.count) render=\(shouldRender)")
+        logger.log("applySnapshot reason=\(reason) items=\(items.count) added=\(addedIds.count) removed=\(removedIds.count) render=\(shouldRender)")
         if shouldRender {
             refresh()
-            if !items.isEmpty {
+            if !addedIds.isEmpty {
                 showOverlay(reason: reason)
+            } else if !removedIds.isEmpty {
+                hideOverlay(reason: "\(reason)-clear")
             }
         }
     }
@@ -830,13 +837,11 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return
         }
 
-        if let button = statusItem.button, let buttonWindow = button.window {
-            let buttonRectInWindow = button.convert(button.bounds, to: nil)
-            let buttonRectOnScreen = buttonWindow.convertToScreen(buttonRectInWindow)
+        if let visibleFrame = currentScreenVisibleFrame() {
             window.setFrame(
                 NSRect(
-                    x: buttonRectOnScreen.maxX - width,
-                    y: buttonRectOnScreen.minY - height - 6,
+                    x: visibleFrame.maxX - width - 18,
+                    y: visibleFrame.maxY - height - 14,
                     width: width,
                     height: height
                 ),
@@ -846,6 +851,19 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             window.setFrame(NSRect(x: 0, y: 0, width: width, height: height), display: true)
         }
         logger.log("layoutPanel frame=\(NSStringFromRect(window.frame))")
+    }
+
+    private func currentScreenVisibleFrame() -> NSRect? {
+        let mouseLocation = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) {
+            return screen.visibleFrame
+        }
+
+        if let screen = statusItem.button?.window?.screen {
+            return screen.visibleFrame
+        }
+
+        return NSScreen.main?.visibleFrame
     }
 
     @objc private func toggleOverlay() {
@@ -879,6 +897,16 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         logger.log("showOverlay visibleAfter=\(window.isVisible) activeSpaceAfter=\(window.isOnActiveSpace)")
+    }
+
+    private func hideOverlay(reason: String) {
+        guard let window = overlayWindow else {
+            logger.log("hideOverlay reason=\(reason) missingWindow=true")
+            return
+        }
+
+        logger.log("hideOverlay reason=\(reason) visibleBefore=\(window.isVisible)")
+        window.orderOut(nil)
     }
 
     private func openSession(sessionId: String) {

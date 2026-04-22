@@ -2,7 +2,7 @@ import net from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 import { loadConfig, socketPath } from './config.js';
 import { listSessions, upsertFromEvent, setSessionStopSnapshot } from './session-registry.js';
-import { clearSessionNotification, sendSessionNotification } from './notify.js';
+import { clearSessionNotification, replaceOverlaySnapshot, sendSessionNotification } from './notify.js';
 import { summarizeTranscriptTail } from './summary.js';
 import { DaemonEvent } from './types.js';
 import { usageSnapshotFromTranscript } from './usage.js';
@@ -55,10 +55,5 @@ function handleEvent(event: DaemonEvent): void {
 }
 
 function replayWaitingSessions(): void {
-  for (const session of listSessions()) {
-    if (session.status !== 'waiting') {
-      continue;
-    }
-    sendSessionNotification(session);
-  }
+  replaceOverlaySnapshot(listSessions().filter((session) => session.status === 'waiting'));
 }

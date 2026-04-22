@@ -46,9 +46,24 @@ function truncate(text: string, limit: number): string {
 }
 
 export function sendSessionNotification(session: SessionRecord): void {
+  const event = overlayShowEvent(session);
+  updateOverlaySnapshot(event);
+  sendOverlayEvent(event);
+}
+
+export function replaceOverlaySnapshot(sessions: SessionRecord[]): void {
+  const presentation = currentPresentation();
+  const snapshot: OverlaySnapshot = {
+    presentation,
+    items: sessions.map((session) => overlayShowEvent(session, presentation))
+  };
+  writeFileSync(overlaySnapshotPath(), JSON.stringify(snapshot, null, 2));
+}
+
+function overlayShowEvent(session: SessionRecord, presentation = currentPresentation()): OverlayEvent {
   const config = loadConfig();
   const message = truncate(session.lastSummary ?? 'Ready for your next prompt.', config.overlaySummaryMaxChars);
-  const event: OverlayEvent = {
+  return {
     type: 'show',
     sessionId: session.sessionId,
     displayName: session.displayName,
@@ -58,15 +73,8 @@ export function sendSessionNotification(session: SessionRecord): void {
     timestamp: new Date().toISOString(),
     focusCommand: focusCommand(session.sessionId),
     repromptCommand: canRepromptSession(session) ? repromptCommand(session.sessionId) : undefined,
-    presentation: {
-      width: config.overlayWidth,
-      maxVisibleRows: config.overlayMaxVisibleRows,
-      summaryVisible: config.overlayShowSummary,
-      summaryMaxLines: config.overlaySummaryMaxLines
-    }
+    presentation
   };
-  updateOverlaySnapshot(event);
-  sendOverlayEvent(event);
 }
 
 export function clearSessionNotification(sessionId: string): void {
@@ -80,11 +88,15 @@ export function clearSessionNotification(sessionId: string): void {
 }
 
 function sendOverlayEvent(event: OverlayEvent): void {
-  void event;
-  ensureOverlayProcess();
+  const canReuseProcess = overlayProcess && !overlayProcess.killed;
+  if (event.type === 'clear' && !canReuseProcess) {
+    return;
+  }
+
+  ensureOverlayProcess(event.type === 'show');
 }
 
-function ensureOverlayProcess(): ChildProcess {
+function ensureOverlayProcess(showOnLaunch: boolean): ChildProcess {
   if (overlayProcess && !overlayProcess.killed) {
     return overlayProcess;
   }
@@ -96,7 +108,8 @@ function ensureOverlayProcess(): ChildProcess {
       ...process.env,
       CODEX_BEACON_OVERLAY_STATE_PATH: overlayStatePath(),
       CODEX_BEACON_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
-      CODEX_BEACON_OVERLAY_LOG_PATH: overlayHelperLogPath()
+      CODEX_BEACON_OVERLAY_LOG_PATH: overlayHelperLogPath(),
+      CODEX_BEACON_OVERLAY_SHOW_ON_LAUNCH: showOnLaunch ? '1' : '0'
     }
   });
   child.on('exit', () => {
@@ -123,6 +136,16 @@ function updateOverlaySnapshot(event: OverlayEvent): void {
   }
 
   writeFileSync(overlaySnapshotPath(), JSON.stringify(snapshot, null, 2));
+}
+
+function currentPresentation(): OverlayPresentation {
+  const config = loadConfig();
+  return {
+    width: config.overlayWidth,
+    maxVisibleRows: config.overlayMaxVisibleRows,
+    summaryVisible: config.overlayShowSummary,
+    summaryMaxLines: config.overlaySummaryMaxLines
+  };
 }
 
 function loadOverlaySnapshot(): OverlaySnapshot {
