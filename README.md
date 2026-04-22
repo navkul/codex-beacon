@@ -2,7 +2,7 @@
 
 Codex Beacon is a low-latency macOS companion for Codex interactive sessions.
 
-It tracks open interactive Codex sessions, assigns each one a stable display name like `codex 1`, opens a custom macOS menu-bar overlay when a session returns control, and lets you click the overlay row to jump back to the terminal session that needs your next prompt.
+It tracks open interactive Codex sessions, assigns each one a stable display name like `codex 1`, opens a custom macOS menu-bar overlay when a session returns control, and lets you use explicit row controls to jump back to or dismiss the session that needs your next prompt.
 
 ## Goals
 
@@ -11,7 +11,7 @@ It tracks open interactive Codex sessions, assigns each one a stable display nam
 - give every active session a unique monotonic display name, unless the user provides a custom one
 - summarize the latest session state in the overlay row
 - let the user reorder the waiting queue and dismiss rows cleanly
-- show a compact view of the latest Codex rate-limit usage seen by that session
+- show a compact view of the latest Codex rate-limit usage in the overlay header
 - let the user inline-reprompt a waiting session without focusing the terminal when the terminal app supports it
 - let a click focus the original macOS terminal window when possible
 - clear the session overlay row as soon as the user prompts Codex again
@@ -23,7 +23,7 @@ It tracks open interactive Codex sessions, assigns each one a stable display nam
 - Codex hooks emit tiny JSON events on `SessionStart`, `UserPromptSubmit`, and `Stop`
 - a background daemon receives hook events over a local Unix socket
 - the daemon updates session state, persists the rendered overlay model, and ensures a native Swift menu-bar helper window is running
-- overlay row clicks run a local focus command that re-activates the terminal app and window
+- overlay row controls run local focus and dismiss commands without making the whole row a click target
 
 The hook path should do no heavy work. It should enqueue and return.
 
@@ -114,8 +114,9 @@ codex-beacon config set overlaySummaryMaxChars 140
 
 The overlay now also carries:
 
-- a drag handle for queue ordering
-- a compact usage meter based on the latest transcript `token_count` snapshot
+- drag-to-reorder from the row body
+- a compact header usage summary based on the latest transcript `token_count` snapshot
+- explicit trailing row controls for dismiss and focus
 - an inline one-line reprompt field for iTerm/iTerm2 and Terminal.app sessions
 
 Beacon now persists the rendered overlay model in `~/.codex-beacon/overlay-snapshot.json`, so restarting the daemon/helper can repopulate current waiting sessions instead of coming back empty.
@@ -149,7 +150,7 @@ Rows now use explicit trailing controls instead of full-row focus:
 - `x` dismisses the row
 - the arrow button under it focuses the terminal session
 
-Rows are still reorderable, but dragging now works from the row body rather than from a dedicated handle icon. The status dot also now sits to the right of the session name.
+Rows are still reorderable, but dragging now works from the row body rather than from a dedicated handle icon. The status dot now sits to the right of the session name, and the row layout uses separate content and action columns so summaries can use the available width before wrapping.
 
 If you need to debug helper visibility, inspect:
 
