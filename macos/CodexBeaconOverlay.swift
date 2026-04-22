@@ -249,7 +249,7 @@ final class OverlayRowView: NSView {
         repromptField.isBezeled = false
         repromptField.drawsBackground = false
         repromptField.focusRingType = .none
-        repromptField.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        repromptField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         repromptField.textColor = NSColor.labelColor.withAlphaComponent(0.92)
         repromptField.placeholderString = item.repromptCommand == nil ? "Reprompt unavailable" : "Reprompt…"
         repromptField.isEditable = item.repromptCommand != nil
@@ -374,7 +374,7 @@ final class OverlayRowView: NSView {
 
     private func label(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight) -> NSTextField {
         let field = NSTextField(labelWithString: text)
-        field.font = NSFont.systemFont(ofSize: size, weight: weight)
+        field.font = NSFont.monospacedSystemFont(ofSize: size, weight: weight)
         field.textColor = color
         field.translatesAutoresizingMaskIntoConstraints = false
         return field
@@ -494,7 +494,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
     private func configureStatusItem() {
         statusItem.button?.title = "Beacon"
-        statusItem.button?.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        statusItem.button?.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggleOverlay)
         logger.log("configureStatusItem title=Beacon")
@@ -530,7 +530,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         backgroundView.frame = rootView.bounds
         backgroundView.autoresizingMask = [.width, .height]
 
-        headerTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        headerTitle.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
         headerTitle.textColor = NSColor.labelColor.withAlphaComponent(0.94)
         headerTitle.isBezeled = false
         headerTitle.isBordered = false
@@ -538,7 +538,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerTitle.isEditable = false
         headerTitle.isSelectable = false
 
-        headerSubtitle.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        headerSubtitle.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         headerSubtitle.textColor = NSColor.secondaryLabelColor
         headerSubtitle.isBezeled = false
         headerSubtitle.isBordered = false
@@ -786,7 +786,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
 
         headerUsagePrimary.stringValue = usageHeaderLine(label: "5h", snapshot: usage.primary) ?? ""
-        headerUsageSecondary.stringValue = usageHeaderLine(label: "wk", snapshot: usage.secondary) ?? ""
+        headerUsageSecondary.stringValue = usageHeaderLine(label: nil, snapshot: usage.secondary) ?? ""
     }
 
     private func latestUsageSnapshot() -> SessionUsageSnapshot? {
@@ -799,16 +799,17 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             }
     }
 
-    private func usageHeaderLine(label: String, snapshot: UsageWindowSnapshot?) -> String? {
+    private func usageHeaderLine(label: String?, snapshot: UsageWindowSnapshot?) -> String? {
         guard let snapshot else {
             return nil
         }
 
         let percentLeft = max(0, min(100, Int((100 - snapshot.usedPercent).rounded())))
+        let prefix = label.map { "\($0) " } ?? ""
         if let resetText = resetText(from: snapshot.resetsAt) {
-            return "\(label) \(percentLeft)% left  \(resetText)"
+            return "\(prefix)\(percentLeft)% left  \(resetText)"
         }
-        return "\(label) \(percentLeft)% left"
+        return "\(prefix)\(percentLeft)% left"
     }
 
     private func resetText(from timestamp: Double?) -> String? {
