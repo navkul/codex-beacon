@@ -179,7 +179,7 @@ final class OverlayRowView: NSView {
     private enum Metrics {
         static let horizontalInset: CGFloat = 16
         static let topInset: CGFloat = 13
-        static let bottomInset: CGFloat = 10
+        static let bottomInset: CGFloat = 12
         static let contentSpacing: CGFloat = 6
         static let titleSpacing: CGFloat = 8
         static let actionSpacing: CGFloat = 6

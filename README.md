@@ -160,6 +160,8 @@ The helper also no longer uses a fixed row-height estimate for summary rows. Wai
 
 That content-sized layout now keeps a touch more breathing room below the reprompt underline so the footer reads evenly against the title edge.
 
+The footer inset has since been increased one more step so the reprompt area has a slightly calmer bottom margin without reopening the row-height problem.
+
 If you need to debug helper visibility, inspect:
 
 ```bash
