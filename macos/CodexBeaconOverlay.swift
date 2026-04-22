@@ -119,6 +119,10 @@ final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+private func overlayFont(size: CGFloat, weight: NSFont.Weight) -> NSFont {
+    NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+}
+
 final class OverlayStateStore {
     private let url: URL
     private var orderedSessionIds: [String]
@@ -178,10 +182,10 @@ final class OverlayRowView: NSView {
     private let dismissAction: (String) -> Void
     private let repromptAction: (String, String) -> Void
     private let moveAction: (String, NSPoint) -> Void
-    private let handleView = NSImageView()
+    private let actionButtonsStack = NSStackView()
     private let repromptField = NSTextField()
+    private let repromptContainer = NSView()
     private var trackingPoint: NSPoint?
-    private var draggingFromHandle = false
     private var isDraggingRow = false
 
     init(
@@ -206,50 +210,59 @@ final class OverlayRowView: NSView {
         layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
         layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.34).cgColor
 
-        handleView.image = NSImage(systemSymbolName: "line.3.horizontal", accessibilityDescription: "Reorder")
-        handleView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
-        handleView.contentTintColor = NSColor.tertiaryLabelColor.withAlphaComponent(0.74)
-        handleView.translatesAutoresizingMaskIntoConstraints = false
-
         let dot = NSView()
         dot.translatesAutoresizingMaskIntoConstraints = false
         dot.wantsLayer = true
         dot.layer?.cornerRadius = 3
         dot.layer?.backgroundColor = stateColor(item.state).cgColor
 
-        let title = label(item.displayName, size: 15, color: NSColor.labelColor.withAlphaComponent(0.95), weight: .semibold)
+        let title = label(item.displayName, size: 13, color: NSColor.labelColor.withAlphaComponent(0.95), weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
 
         let dismissButton = subtleIconButton(
             systemName: "xmark",
             description: "Dismiss",
             action: #selector(dismissRow(_:)),
-            sessionId: item.sessionId
+            sessionId: item.sessionId,
+            tintColor: NSColor.tertiaryLabelColor.withAlphaComponent(0.88)
         )
+
+        let openButton = subtleIconButton(
+            systemName: "arrow.up.right",
+            description: "Open session",
+            action: #selector(openRow(_:)),
+            sessionId: item.sessionId,
+            tintColor: NSColor.controlAccentColor.withAlphaComponent(0.96)
+        )
+
+        actionButtonsStack.orientation = .vertical
+        actionButtonsStack.alignment = .centerX
+        actionButtonsStack.spacing = 8
+        actionButtonsStack.translatesAutoresizingMaskIntoConstraints = false
+        actionButtonsStack.addArrangedSubview(dismissButton)
+        actionButtonsStack.addArrangedSubview(openButton)
 
         let topRow = NSStackView()
         topRow.orientation = .horizontal
-        topRow.alignment = .centerY
-        topRow.spacing = 10
+        topRow.alignment = .top
+        topRow.spacing = 8
         topRow.translatesAutoresizingMaskIntoConstraints = false
-        topRow.addArrangedSubview(handleView)
-        topRow.addArrangedSubview(dot)
         topRow.addArrangedSubview(title)
+        topRow.addArrangedSubview(dot)
         topRow.addArrangedSubview(spacer())
-        topRow.addArrangedSubview(dismissButton)
+        topRow.addArrangedSubview(actionButtonsStack)
 
-        let summary = label(item.summary, size: 12, color: NSColor.secondaryLabelColor.withAlphaComponent(0.94), weight: .regular)
+        let summary = label(item.summary, size: 11, color: NSColor.secondaryLabelColor.withAlphaComponent(0.94), weight: .medium)
         summary.lineBreakMode = .byTruncatingTail
         summary.maximumNumberOfLines = presentation.summaryMaxLines
 
-        let repromptContainer = NSView()
         repromptContainer.translatesAutoresizingMaskIntoConstraints = false
 
         repromptField.isBordered = false
         repromptField.isBezeled = false
         repromptField.drawsBackground = false
         repromptField.focusRingType = .none
-        repromptField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        repromptField.font = overlayFont(size: 11, weight: .medium)
         repromptField.textColor = NSColor.labelColor.withAlphaComponent(0.92)
         repromptField.placeholderString = item.repromptCommand == nil ? "Reprompt unavailable" : "Reprompt…"
         repromptField.isEditable = item.repromptCommand != nil
@@ -283,8 +296,6 @@ final class OverlayRowView: NSView {
             widthAnchor.constraint(equalToConstant: CGFloat(presentation.width) - 32),
             dot.widthAnchor.constraint(equalToConstant: 6),
             dot.heightAnchor.constraint(equalToConstant: 6),
-            handleView.widthAnchor.constraint(equalToConstant: 12),
-            handleView.heightAnchor.constraint(equalToConstant: 12),
             bodyStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             bodyStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             bodyStack.topAnchor.constraint(equalTo: topAnchor, constant: 14),
@@ -312,13 +323,17 @@ final class OverlayRowView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        guard !isInteractiveArea(point) else {
+            trackingPoint = nil
+            isDraggingRow = false
+            return
+        }
         trackingPoint = point
-        draggingFromHandle = handleView.frame.insetBy(dx: -6, dy: -6).contains(point)
         isDraggingRow = false
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard draggingFromHandle, let start = trackingPoint else {
+        guard let start = trackingPoint else {
             return
         }
 
@@ -339,29 +354,24 @@ final class OverlayRowView: NSView {
             }
             alphaValue = 1
             trackingPoint = nil
-            draggingFromHandle = false
             isDraggingRow = false
         }
 
-        if draggingFromHandle {
-            if isDraggingRow {
-                moveAction(sessionId, event.locationInWindow)
-            }
+        guard trackingPoint != nil else {
             return
         }
 
-        guard let start = trackingPoint else {
-            return
-        }
-
-        let point = convert(event.locationInWindow, from: nil)
-        if hypot(point.x - start.x, point.y - start.y) <= 4 {
-            openAction(sessionId)
+        if isDraggingRow {
+            moveAction(sessionId, event.locationInWindow)
         }
     }
 
     @objc private func dismissRow(_ sender: NSButton) {
         dismissAction(sessionId)
+    }
+
+    @objc private func openRow(_ sender: NSButton) {
+        openAction(sessionId)
     }
 
     @objc private func submitReprompt(_ sender: NSTextField) {
@@ -374,7 +384,7 @@ final class OverlayRowView: NSView {
 
     private func label(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight) -> NSTextField {
         let field = NSTextField(labelWithString: text)
-        field.font = NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+        field.font = overlayFont(size: size, weight: weight)
         field.textColor = color
         field.translatesAutoresizingMaskIntoConstraints = false
         return field
@@ -386,13 +396,13 @@ final class OverlayRowView: NSView {
         return view
     }
 
-    private func subtleIconButton(systemName: String, description: String, action: Selector, sessionId: String) -> NSButton {
+    private func subtleIconButton(systemName: String, description: String, action: Selector, sessionId: String, tintColor: NSColor) -> NSButton {
         let button = NSButton(title: "", target: self, action: action)
         button.identifier = NSUserInterfaceItemIdentifier(sessionId)
         button.isBordered = false
         button.bezelStyle = .shadowlessSquare
         button.image = NSImage(systemSymbolName: systemName, accessibilityDescription: description)
-        button.contentTintColor = NSColor.tertiaryLabelColor.withAlphaComponent(0.88)
+        button.contentTintColor = tintColor
         button.imageScaling = .scaleProportionallyDown
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -400,6 +410,16 @@ final class OverlayRowView: NSView {
             button.heightAnchor.constraint(equalToConstant: 14)
         ])
         return button
+    }
+
+    private func isInteractiveArea(_ point: NSPoint) -> Bool {
+        let actionRect = convert(actionButtonsStack.bounds, from: actionButtonsStack).insetBy(dx: -8, dy: -8)
+        if actionRect.contains(point) {
+            return true
+        }
+
+        let repromptRect = convert(repromptContainer.bounds, from: repromptContainer).insetBy(dx: 0, dy: -4)
+        return repromptRect.contains(point)
     }
 
     private func stateColor(_ state: SummaryState) -> NSColor {
@@ -494,7 +514,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
     private func configureStatusItem() {
         statusItem.button?.title = "Beacon"
-        statusItem.button?.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        statusItem.button?.font = overlayFont(size: 12, weight: .medium)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggleOverlay)
         logger.log("configureStatusItem title=Beacon")
@@ -530,7 +550,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         backgroundView.frame = rootView.bounds
         backgroundView.autoresizingMask = [.width, .height]
 
-        headerTitle.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold)
+        headerTitle.font = overlayFont(size: 12, weight: .semibold)
         headerTitle.textColor = NSColor.labelColor.withAlphaComponent(0.94)
         headerTitle.isBezeled = false
         headerTitle.isBordered = false
@@ -538,7 +558,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerTitle.isEditable = false
         headerTitle.isSelectable = false
 
-        headerSubtitle.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        headerSubtitle.font = overlayFont(size: 11, weight: .medium)
         headerSubtitle.textColor = NSColor.secondaryLabelColor
         headerSubtitle.isBezeled = false
         headerSubtitle.isBordered = false
@@ -546,7 +566,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerSubtitle.isEditable = false
         headerSubtitle.isSelectable = false
 
-        headerUsagePrimary.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        headerUsagePrimary.font = overlayFont(size: 11, weight: .medium)
         headerUsagePrimary.textColor = NSColor.labelColor.withAlphaComponent(0.88)
         headerUsagePrimary.alignment = .right
         headerUsagePrimary.isBezeled = false
@@ -556,7 +576,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerUsagePrimary.isSelectable = false
         headerUsagePrimary.lineBreakMode = .byTruncatingHead
 
-        headerUsageSecondary.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        headerUsageSecondary.font = overlayFont(size: 11, weight: .medium)
         headerUsageSecondary.textColor = NSColor.secondaryLabelColor.withAlphaComponent(0.92)
         headerUsageSecondary.alignment = .right
         headerUsageSecondary.isBezeled = false
@@ -785,7 +805,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return
         }
 
-        headerUsagePrimary.stringValue = usageHeaderLine(label: "5h", snapshot: usage.primary) ?? ""
+        headerUsagePrimary.stringValue = usageHeaderLine(label: nil, snapshot: usage.primary) ?? ""
         headerUsageSecondary.stringValue = usageHeaderLine(label: nil, snapshot: usage.secondary) ?? ""
     }
 

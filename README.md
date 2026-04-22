@@ -144,6 +144,13 @@ The header block uses compact monospaced text rather than a graphical battery so
 
 The overlay now uses that same monospaced system font throughout instead of limiting it to the usage block, and the weekly line no longer shows a `wk` prefix.
 
+Rows now use explicit trailing controls instead of full-row focus:
+
+- `x` dismisses the row
+- the arrow button under it focuses the terminal session
+
+Rows are still reorderable, but dragging now works from the row body rather than from a dedicated handle icon. The status dot also now sits to the right of the session name.
+
 If you need to debug helper visibility, inspect:
 
 ```bash
