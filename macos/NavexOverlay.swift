@@ -9,6 +9,11 @@ enum SummaryState: String, Decodable {
     case needsInput = "needs-input"
 }
 
+enum SessionStatus: String, Decodable {
+    case active
+    case waiting
+}
+
 struct CommandSpec: Decodable {
     let executable: String
     let args: [String]
@@ -43,6 +48,7 @@ struct OverlayEvent: Decodable {
     let sessionId: String
     let displayName: String?
     let summary: String?
+    let status: SessionStatus?
     let state: SummaryState?
     let usage: SessionUsageSnapshot?
     let timestamp: String?
@@ -55,6 +61,7 @@ struct OverlayItem {
     let sessionId: String
     let displayName: String
     let summary: String
+    let status: SessionStatus
     let state: SummaryState
     let usage: SessionUsageSnapshot?
     let timestamp: String
@@ -204,13 +211,14 @@ final class OverlayRowView: NSView {
 
     let sessionId: String
 
+    private let status: SessionStatus
     private let openAction: (String) -> Void
-    private let dismissAction: (String) -> Void
     private let repromptAction: (String, String) -> Void
     private let moveAction: (String, NSPoint) -> Void
     private let actionButtonsStack = NSStackView()
     private let repromptField = NSTextField()
     private let repromptContainer = NSView()
+    private var workingTimer: Timer?
     private var trackingPoint: NSPoint?
     private var isDraggingRow = false
 
@@ -218,13 +226,12 @@ final class OverlayRowView: NSView {
         item: OverlayItem,
         presentation: OverlayPresentation,
         openAction: @escaping (String) -> Void,
-        dismissAction: @escaping (String) -> Void,
         repromptAction: @escaping (String, String) -> Void,
         moveAction: @escaping (String, NSPoint) -> Void
     ) {
         self.sessionId = item.sessionId
+        self.status = item.status
         self.openAction = openAction
-        self.dismissAction = dismissAction
         self.repromptAction = repromptAction
         self.moveAction = moveAction
         super.init(frame: .zero)
@@ -247,14 +254,6 @@ final class OverlayRowView: NSView {
 
         let actionTint = NSColor.tertiaryLabelColor.withAlphaComponent(0.88)
 
-        let dismissButton = subtleIconButton(
-            systemName: "xmark",
-            description: "Dismiss",
-            action: #selector(dismissRow(_:)),
-            sessionId: item.sessionId,
-            tintColor: actionTint
-        )
-
         let openButton = subtleIconButton(
             systemName: "arrow.up.right",
             description: "Open session",
@@ -269,7 +268,6 @@ final class OverlayRowView: NSView {
         actionButtonsStack.translatesAutoresizingMaskIntoConstraints = false
         actionButtonsStack.setContentCompressionResistancePriority(.required, for: .vertical)
         actionButtonsStack.setContentHuggingPriority(.required, for: .vertical)
-        actionButtonsStack.addArrangedSubview(dismissButton)
         actionButtonsStack.addArrangedSubview(openButton)
 
         let titleRow = NSStackView()
@@ -305,9 +303,10 @@ final class OverlayRowView: NSView {
         repromptField.focusRingType = .none
         repromptField.font = overlayFont(size: 11, weight: .medium)
         repromptField.textColor = NSColor.labelColor.withAlphaComponent(0.92)
-        repromptField.placeholderString = item.repromptCommand == nil ? "Reprompt unavailable" : "Reprompt…"
-        repromptField.isEditable = item.repromptCommand != nil
-        repromptField.isSelectable = item.repromptCommand != nil
+        repromptField.placeholderString = repromptPlaceholder(for: item)
+        repromptField.isEditable = item.status == .waiting && item.repromptCommand != nil
+        repromptField.isSelectable = item.status == .waiting && item.repromptCommand != nil
+        repromptField.stringValue = item.status == .active ? "Working." : ""
         repromptField.target = self
         repromptField.action = #selector(submitReprompt(_:))
         repromptField.translatesAutoresizingMaskIntoConstraints = false
@@ -316,7 +315,7 @@ final class OverlayRowView: NSView {
         underline.translatesAutoresizingMaskIntoConstraints = false
         underline.wantsLayer = true
         underline.layer?.cornerRadius = 0.5
-        underline.layer?.backgroundColor = NSColor.white.withAlphaComponent(item.repromptCommand == nil ? 0.06 : 0.16).cgColor
+        underline.layer?.backgroundColor = underlineColor(for: item).cgColor
 
         repromptContainer.addSubview(repromptField)
         repromptContainer.addSubview(underline)
@@ -364,10 +363,18 @@ final class OverlayRowView: NSView {
             actionButtonsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
             actionButtonsStack.widthAnchor.constraint(equalToConstant: Metrics.actionButtonSize)
         ])
+
+        if item.status == .active {
+            startWorkingAnimation()
+        }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        workingTimer?.invalidate()
     }
 
     override var acceptsFirstResponder: Bool {
@@ -417,10 +424,6 @@ final class OverlayRowView: NSView {
         if isDraggingRow {
             moveAction(sessionId, event.locationInWindow)
         }
-    }
-
-    @objc private func dismissRow(_ sender: NSButton) {
-        dismissAction(sessionId)
     }
 
     @objc private func openRow(_ sender: NSButton) {
@@ -473,6 +476,10 @@ final class OverlayRowView: NSView {
     }
 
     private func stateColor(_ state: SummaryState) -> NSColor {
+        if status == .active {
+            return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.98)
+        }
+
         switch state {
         case .done:
             return NSColor(calibratedRed: 0.45, green: 0.83, blue: 0.63, alpha: 0.95)
@@ -484,6 +491,34 @@ final class OverlayRowView: NSView {
             return NSColor(calibratedRed: 0.53, green: 0.74, blue: 0.98, alpha: 0.95)
         case .ready:
             return NSColor(calibratedWhite: 0.72, alpha: 0.95)
+        }
+    }
+
+    private func repromptPlaceholder(for item: OverlayItem) -> String {
+        if item.status == .active {
+            return "Working."
+        }
+        return item.repromptCommand == nil ? "Reprompt unavailable" : "Reprompt…"
+    }
+
+    private func underlineColor(for item: OverlayItem) -> NSColor {
+        if item.status == .active {
+            return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.26)
+        }
+        return NSColor.white.withAlphaComponent(item.repromptCommand == nil ? 0.06 : 0.16)
+    }
+
+    private func startWorkingAnimation() {
+        let frames = ["Working.", "Working..", "Working...", "Working.."]
+        var index = 0
+        repromptField.stringValue = frames[index]
+        workingTimer = Timer.scheduledTimer(withTimeInterval: 0.38, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            index = (index + 1) % frames.count
+            self.repromptField.stringValue = frames[index]
         }
     }
 }
@@ -501,7 +536,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let rootView = FlippedView(frame: NSRect(x: 0, y: 0, width: 384, height: 180))
     private let backgroundView = FlippedView()
     private let headerTitle = NSTextField(labelWithString: "Navex")
-    private let headerSubtitle = NSTextField(labelWithString: "No waiting sessions")
+    private let headerSubtitle = NSTextField(labelWithString: "No live sessions")
     private let headerUsagePrimary = NSTextField(labelWithString: "")
     private let headerUsageSecondary = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView()
@@ -724,6 +759,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 sessionId: event.sessionId,
                 displayName: event.displayName ?? "Codex",
                 summary: event.summary ?? "Ready for your next prompt.",
+                status: event.status ?? .waiting,
                 state: event.state ?? .ready,
                 usage: event.usage,
                 timestamp: event.timestamp ?? "",
@@ -736,12 +772,15 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         let addedIds = nextIds.subtracting(previousIds)
         let removedIds = previousIds.subtracting(nextIds)
         items = nextItems
+        for sessionId in removedIds {
+            stateStore.remove(sessionId: sessionId)
+        }
         logger.log("applySnapshot reason=\(reason) items=\(items.count) added=\(addedIds.count) removed=\(removedIds.count) render=\(shouldRender)")
         if shouldRender {
             refresh()
-            if !addedIds.isEmpty {
+            if !addedIds.isEmpty && addedIds.contains(where: { nextItems[$0]?.status == .waiting }) {
                 showOverlay(reason: reason)
-            } else if !removedIds.isEmpty {
+            } else if items.isEmpty && !removedIds.isEmpty {
                 hideOverlay(reason: "\(reason)-clear")
             }
         }
@@ -751,7 +790,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         logger.log("refresh start items=\(items.count)")
         headerTitle.stringValue = currentAppDisplayName()
         updateStatusItem()
-        headerSubtitle.stringValue = items.isEmpty ? "No waiting sessions" : "\(items.count) waiting"
+        headerSubtitle.stringValue = headerSubtitleText()
         updateHeaderUsage()
 
         guard !items.isEmpty else {
@@ -774,9 +813,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 presentation: presentation,
                 openAction: { [weak self] sessionId in
                     self?.openSession(sessionId: sessionId)
-                },
-                dismissAction: { [weak self] sessionId in
-                    self?.dismissSession(sessionId: sessionId)
                 },
                 repromptAction: { [weak self] sessionId, text in
                     self?.repromptSession(sessionId: sessionId, text: text)
@@ -840,6 +876,22 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return configured
         }
         return "Navex"
+    }
+
+    private func headerSubtitleText() -> String {
+        guard !items.isEmpty else {
+            return "No live sessions"
+        }
+
+        let waitingCount = items.values.filter { $0.status == .waiting }.count
+        let activeCount = items.count - waitingCount
+        if waitingCount == 0 {
+            return "\(items.count) live"
+        }
+        if activeCount == 0 {
+            return "\(waitingCount) waiting"
+        }
+        return "\(items.count) live · \(waitingCount) waiting"
     }
 
     private func layoutPanel() {
@@ -1009,15 +1061,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return
         }
         launch(item.focusCommand)
-        dismissSession(sessionId: sessionId)
         overlayWindow?.orderOut(nil)
-    }
-
-    private func dismissSession(sessionId: String) {
-        items.removeValue(forKey: sessionId)
-        stateStore.remove(sessionId: sessionId)
-        logger.log("dismissSession sessionId=\(sessionId) remaining=\(items.count)")
-        refresh()
     }
 
     private func repromptSession(sessionId: String, text: String) {
@@ -1033,7 +1077,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                     NSSound.beep()
                     return
                 }
-                self?.dismissSession(sessionId: sessionId)
+                self?.overlayWindow?.orderOut(nil)
             }
         }
     }
