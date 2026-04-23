@@ -1,6 +1,12 @@
 node_modules/
 dist/
+.navex/
 .codex-beacon/
 .DS_Store
 *.log
-*.md
+AGENTS.md
+ARCHITECTURE.md
+FEATURES.md
+FINDINGS.md
+PROGRESS.md
+PROMPT.md

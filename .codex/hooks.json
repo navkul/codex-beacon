@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codex-beacon hook session-start",
-            "statusMessage": "Codex Beacon registering session"
+            "command": "navex hook session-start",
+            "statusMessage": "Navex registering session"
           }
         ]
       }
@@ -17,8 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codex-beacon hook user-prompt-submit",
-            "statusMessage": "Codex Beacon clearing delivered notifications"
+            "command": "navex hook user-prompt-submit",
+            "statusMessage": "Navex clearing delivered notifications"
           }
         ]
       }
@@ -28,9 +28,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codex-beacon hook stop",
+            "command": "navex hook stop",
             "timeout": 5,
-            "statusMessage": "Codex Beacon queueing session notification"
+            "statusMessage": "Navex queueing session notification"
           }
         ]
       }

@@ -4,9 +4,9 @@ import { HookPayload } from './types.js';
 
 export async function runSessionStartHook(): Promise<void> {
   const payload = JSON.parse(readFileSync(0, 'utf8')) as HookPayload;
-  const terminalApp = process.env.CODEX_BEACON_TERMINAL_APP || process.env.TERM_PROGRAM || undefined;
+  const terminalApp = process.env.NAVEX_TERMINAL_APP || process.env.TERM_PROGRAM || undefined;
   const terminalSessionUniqueId =
-    process.env.CODEX_BEACON_TERMINAL_SESSION_UNIQUE_ID
+    process.env.NAVEX_TERMINAL_SESSION_UNIQUE_ID
     || parseITermSessionUniqueId(process.env.ITERM_SESSION_ID)
     || parseITermSessionUniqueId(process.env.TERM_SESSION_ID);
 
@@ -15,12 +15,12 @@ export async function runSessionStartHook(): Promise<void> {
     sessionId: payload.session_id,
     cwd: payload.cwd,
     transcriptPath: payload.transcript_path,
-    displayName: process.env.CODEX_BEACON_SESSION_NAME || undefined,
+    displayName: process.env.NAVEX_SESSION_NAME || undefined,
     terminalApp,
-    terminalWindowId: process.env.CODEX_BEACON_TERMINAL_WINDOW_ID || undefined,
-    terminalTabIndex: parseNumber(process.env.CODEX_BEACON_TERMINAL_TAB_INDEX),
+    terminalWindowId: process.env.NAVEX_TERMINAL_WINDOW_ID || undefined,
+    terminalTabIndex: parseNumber(process.env.NAVEX_TERMINAL_TAB_INDEX),
     terminalSessionUniqueId,
-    terminalTty: process.env.CODEX_BEACON_TERMINAL_TTY || undefined,
+    terminalTty: process.env.NAVEX_TERMINAL_TTY || undefined,
     timestamp: new Date().toISOString()
   });
 }

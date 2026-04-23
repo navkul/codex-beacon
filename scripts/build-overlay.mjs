@@ -4,7 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 if (process.platform !== 'darwin') {
-  console.error('Codex Beacon overlay helper currently builds on macOS only.');
+  console.error('Navex overlay helper currently builds on macOS only.');
   process.exit(1);
 }
 
@@ -14,8 +14,8 @@ mkdirSync(outputDir, { recursive: true });
 const result = spawnSync('swiftc', [
   '-O',
   '-o',
-  path.join(outputDir, 'CodexBeaconOverlay'),
-  path.join(process.cwd(), 'macos', 'CodexBeaconOverlay.swift')
+  path.join(outputDir, 'NavexOverlay'),
+  path.join(process.cwd(), 'macos', 'NavexOverlay.swift')
 ], {
   stdio: 'inherit'
 });

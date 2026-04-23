@@ -2,12 +2,12 @@ import { accessSync, constants, statSync } from 'node:fs';
 import path from 'node:path';
 
 export function resolveCodexBinary(): string {
-  const configured = process.env.CODEX_BEACON_CODEX_BIN?.trim();
+  const configured = process.env.NAVEX_CODEX_BIN?.trim();
   if (configured) {
     if (isExecutableFile(configured)) {
       return configured;
     }
-    throw new Error(`CODEX_BEACON_CODEX_BIN is not executable: ${configured}`);
+    throw new Error(`NAVEX_CODEX_BIN is not executable: ${configured}`);
   }
 
   const found = findExecutableOnPath('codex');
@@ -15,7 +15,7 @@ export function resolveCodexBinary(): string {
     return found;
   }
 
-  throw new Error('Unable to locate the real codex binary. Set CODEX_BEACON_CODEX_BIN to its full path.');
+  throw new Error('Unable to locate the real codex binary. Set NAVEX_CODEX_BIN to its full path.');
 }
 
 export function findExecutableOnPath(command: string): string | undefined {

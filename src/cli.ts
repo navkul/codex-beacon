@@ -12,11 +12,11 @@ import { repromptSession } from './reprompt.js';
 import { listSessions } from './session-registry.js';
 
 const program = new Command();
-program.name('codex-beacon');
+program.name('navex');
 
 program
   .command('daemon')
-  .description('Run the Codex Beacon daemon')
+  .description('Run the Navex daemon')
   .action(() => {
     runDaemon();
   });
@@ -60,7 +60,7 @@ program
 
 program
   .command('launch')
-  .description('Launch codex through the beacon wrapper')
+  .description('Launch codex through the navex wrapper')
   .allowUnknownOption(true)
   .option('-N, --session-name <name>', 'custom session name')
   .argument('[args...]')
@@ -87,7 +87,7 @@ program
 
 const configCommand = program
   .command('config')
-  .description('Show or update Codex Beacon config');
+  .description('Show or update Navex config');
 
 configCommand
   .command('path')
@@ -149,6 +149,8 @@ function parseConfigKey(key: string): AppConfigKey {
 
 function parseConfigValue(key: AppConfigKey, raw: string): string | number | boolean | null {
   switch (key) {
+    case 'appDisplayName':
+      return parseStringValue(raw, key);
     case 'overlayCommand':
       return raw === 'null' ? null : raw;
     case 'overlayShowSummary':
@@ -185,4 +187,12 @@ function parseIntValue(raw: string, min: number, max: number): number {
     return value;
   }
   throw new Error(`Expected an integer between ${min} and ${max}, got: ${raw}`);
+}
+
+function parseStringValue(raw: string, key: string): string {
+  const value = raw.trim();
+  if (value) {
+    return value;
+  }
+  throw new Error(`Expected a non-empty string for ${key}`);
 }

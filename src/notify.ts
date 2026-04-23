@@ -25,6 +25,7 @@ interface OverlayEvent {
 }
 
 interface OverlayPresentation {
+  appDisplayName: string;
   width: number;
   maxVisibleRows: number;
   summaryVisible: boolean;
@@ -106,10 +107,10 @@ function ensureOverlayProcess(showOnLaunch: boolean): ChildProcess {
     stdio: ['ignore', 'ignore', 'ignore'],
     env: {
       ...process.env,
-      CODEX_BEACON_OVERLAY_STATE_PATH: overlayStatePath(),
-      CODEX_BEACON_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
-      CODEX_BEACON_OVERLAY_LOG_PATH: overlayHelperLogPath(),
-      CODEX_BEACON_OVERLAY_SHOW_ON_LAUNCH: showOnLaunch ? '1' : '0'
+      NAVEX_OVERLAY_STATE_PATH: overlayStatePath(),
+      NAVEX_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
+      NAVEX_OVERLAY_LOG_PATH: overlayHelperLogPath(),
+      NAVEX_OVERLAY_SHOW_ON_LAUNCH: showOnLaunch ? '1' : '0'
     }
   });
   child.on('exit', () => {
@@ -141,6 +142,7 @@ function updateOverlaySnapshot(event: OverlayEvent): void {
 function currentPresentation(): OverlayPresentation {
   const config = loadConfig();
   return {
+    appDisplayName: config.appDisplayName,
     width: config.overlayWidth,
     maxVisibleRows: config.overlayMaxVisibleRows,
     summaryVisible: config.overlayShowSummary,
@@ -173,12 +175,12 @@ function overlayCommand(): string {
     return configured.trim();
   }
 
-  const helperPath = fileURLToPath(new URL('./macos/CodexBeaconOverlay', import.meta.url));
+  const helperPath = fileURLToPath(new URL('./macos/NavexOverlay', import.meta.url));
   if (existsSync(helperPath)) {
     return helperPath;
   }
 
-  return path.join(process.cwd(), 'dist', 'macos', 'CodexBeaconOverlay');
+  return path.join(process.cwd(), 'dist', 'macos', 'NavexOverlay');
 }
 
 function focusCommand(sessionId: string): OverlayCommand {

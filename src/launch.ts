@@ -22,12 +22,12 @@ export function launchCodex(args: string[], customName?: string): void {
     argv0: 'codex',
     env: {
       ...process.env,
-      CODEX_BEACON_SESSION_NAME: customName ?? '',
-      CODEX_BEACON_TERMINAL_APP: terminalApp,
-      CODEX_BEACON_TERMINAL_WINDOW_ID: metadata.terminalWindowId ?? '',
-      CODEX_BEACON_TERMINAL_TAB_INDEX: String(metadata.terminalTabIndex ?? ''),
-      CODEX_BEACON_TERMINAL_SESSION_UNIQUE_ID: metadata.terminalSessionUniqueId ?? '',
-      CODEX_BEACON_TERMINAL_TTY: metadata.terminalTty ?? ''
+      NAVEX_SESSION_NAME: customName ?? '',
+      NAVEX_TERMINAL_APP: terminalApp,
+      NAVEX_TERMINAL_WINDOW_ID: metadata.terminalWindowId ?? '',
+      NAVEX_TERMINAL_TAB_INDEX: String(metadata.terminalTabIndex ?? ''),
+      NAVEX_TERMINAL_SESSION_UNIQUE_ID: metadata.terminalSessionUniqueId ?? '',
+      NAVEX_TERMINAL_TTY: metadata.terminalTty ?? ''
     }
   });
 
@@ -52,7 +52,10 @@ function captureTerminalMetadata(terminalApp: string): LaunchTerminalMetadata {
     const envSessionUniqueId = parseITermSessionUniqueId(process.env.ITERM_SESSION_ID ?? process.env.TERM_SESSION_ID);
     return {
       ...metadata,
-      terminalSessionUniqueId: parseITermSessionUniqueId(process.env.CODEX_BEACON_TERMINAL_SESSION_UNIQUE_ID) ?? envSessionUniqueId ?? metadata.terminalSessionUniqueId,
+      terminalSessionUniqueId:
+        parseITermSessionUniqueId(process.env.NAVEX_TERMINAL_SESSION_UNIQUE_ID)
+        ?? envSessionUniqueId
+        ?? metadata.terminalSessionUniqueId,
       terminalTty: process.env.TTY || captureTerminalTty()
     };
   }

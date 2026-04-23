@@ -1,24 +1,18 @@
 {
-  "name": "codex-beacon",
+  "name": "navex",
   "version": "0.1.0",
-  "description": "Low-latency macOS menu-bar overlay and session tracking for Codex interactive sessions.",
+  "description": "Personal macOS session manager for interactive Codex work.",
   "type": "module",
   "bin": {
-    "codex-beacon": "./dist/cli.js"
+    "navex": "./dist/cli.js"
   },
   "files": [
     "dist",
     "README.md",
-    "AGENTS.md",
-    "ARCHITECTURE.md",
-    "FINDINGS.md",
-    "PROGRESS.md",
-    "PROMPT.md",
-    "FEATURES.md",
     ".codex/hooks.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-overlay.mjs",
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js && node scripts/build-overlay.mjs",
     "clean": "rm -rf dist",
     "check": "tsc --noEmit -p tsconfig.json",
     "dev": "tsx src/cli.ts",

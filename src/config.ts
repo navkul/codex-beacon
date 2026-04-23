@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { AppConfig } from './types.js';
@@ -7,7 +7,11 @@ type LegacyConfig = Partial<AppConfig> & {
   maxNotificationChars?: number;
 };
 
+const DEFAULT_APP_ROOT = path.join(homedir(), '.navex');
+const LEGACY_APP_ROOT = path.join(homedir(), '.codex-beacon');
+
 const DEFAULT_CONFIG: AppConfig = {
+  appDisplayName: 'Navex',
   overlayCommand: null,
   overlayWidth: 384,
   overlayMaxVisibleRows: 4,
@@ -19,6 +23,7 @@ const DEFAULT_CONFIG: AppConfig = {
 };
 
 export const APP_CONFIG_KEYS = [
+  'appDisplayName',
   'overlayCommand',
   'overlayWidth',
   'overlayMaxVisibleRows',
@@ -32,11 +37,11 @@ export const APP_CONFIG_KEYS = [
 export type AppConfigKey = (typeof APP_CONFIG_KEYS)[number];
 
 export function appRoot(): string {
-  return process.env.CODEX_BEACON_HOME ?? path.join(homedir(), '.codex-beacon');
+  return process.env.NAVEX_HOME?.trim() || DEFAULT_APP_ROOT;
 }
 
 export function ensureAppRoot(): string {
-  const root = appRoot();
+  const root = ensureMigratedAppRoot();
   mkdirSync(root, { recursive: true });
   return root;
 }
@@ -72,13 +77,57 @@ export function loadConfig(): AppConfig {
     return DEFAULT_CONFIG;
   }
   const parsed = JSON.parse(readFileSync(file, 'utf8')) as LegacyConfig;
-  return {
-    ...DEFAULT_CONFIG,
-    overlaySummaryMaxChars: parsed.overlaySummaryMaxChars ?? parsed.maxNotificationChars ?? DEFAULT_CONFIG.overlaySummaryMaxChars,
-    ...parsed
-  };
+  return normalizeConfig(parsed);
 }
 
 export function saveConfig(config: AppConfig): void {
-  writeFileSync(configPath(), JSON.stringify(config, null, 2));
+  writeFileSync(configPath(), JSON.stringify(normalizeConfig(config), null, 2));
+}
+
+function ensureMigratedAppRoot(): string {
+  const configured = process.env.NAVEX_HOME?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (!existsSync(LEGACY_APP_ROOT)) {
+    return DEFAULT_APP_ROOT;
+  }
+  if (existsSync(DEFAULT_APP_ROOT)) {
+    return DEFAULT_APP_ROOT;
+  }
+
+  try {
+    renameSync(LEGACY_APP_ROOT, DEFAULT_APP_ROOT);
+    return DEFAULT_APP_ROOT;
+  } catch {
+    return DEFAULT_APP_ROOT;
+  }
+}
+
+function normalizeConfig(config: LegacyConfig): AppConfig {
+  return {
+    appDisplayName: typeof config.appDisplayName === 'string' && config.appDisplayName.trim()
+      ? config.appDisplayName.trim()
+      : DEFAULT_CONFIG.appDisplayName,
+    overlayCommand: typeof config.overlayCommand === 'string' ? config.overlayCommand : DEFAULT_CONFIG.overlayCommand,
+    overlayWidth: typeof config.overlayWidth === 'number' ? config.overlayWidth : DEFAULT_CONFIG.overlayWidth,
+    overlayMaxVisibleRows:
+      typeof config.overlayMaxVisibleRows === 'number' ? config.overlayMaxVisibleRows : DEFAULT_CONFIG.overlayMaxVisibleRows,
+    overlayShowSummary:
+      typeof config.overlayShowSummary === 'boolean' ? config.overlayShowSummary : DEFAULT_CONFIG.overlayShowSummary,
+    overlaySummaryStyle:
+      config.overlaySummaryStyle === 'raw' || config.overlaySummaryStyle === 'smart'
+        ? config.overlaySummaryStyle
+        : DEFAULT_CONFIG.overlaySummaryStyle,
+    overlaySummaryMaxChars:
+      typeof config.overlaySummaryMaxChars === 'number'
+        ? config.overlaySummaryMaxChars
+        : typeof config.maxNotificationChars === 'number'
+          ? config.maxNotificationChars
+          : DEFAULT_CONFIG.overlaySummaryMaxChars,
+    overlaySummaryMaxWords:
+      typeof config.overlaySummaryMaxWords === 'number' ? config.overlaySummaryMaxWords : DEFAULT_CONFIG.overlaySummaryMaxWords,
+    overlaySummaryMaxLines:
+      typeof config.overlaySummaryMaxLines === 'number' ? config.overlaySummaryMaxLines : DEFAULT_CONFIG.overlaySummaryMaxLines
+  };
 }

@@ -31,6 +31,7 @@ struct SessionUsageSnapshot: Decodable {
 }
 
 struct OverlayPresentation: Decodable {
+    let appDisplayName: String?
     let width: Double
     let maxVisibleRows: Int
     let summaryVisible: Bool
@@ -74,11 +75,11 @@ final class OverlayLogger {
     static let shared = OverlayLogger()
 
     private let url: URL?
-    private let queue = DispatchQueue(label: "codex-beacon.overlay.log")
+    private let queue = DispatchQueue(label: "navex.overlay.log")
     private let formatter = ISO8601DateFormatter()
 
     private init() {
-        if let explicit = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_LOG_PATH"], !explicit.isEmpty {
+        if let explicit = envValue("NAVEX_OVERLAY_LOG_PATH") {
             self.url = URL(fileURLWithPath: explicit)
         } else {
             self.url = nil
@@ -117,6 +118,16 @@ final class OverlayLogger {
 
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+private func envValue(_ keys: String...) -> String? {
+    for key in keys {
+        let value = ProcessInfo.processInfo.environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value, !value.isEmpty {
+            return value
+        }
+    }
+    return nil
 }
 
 private func overlayFont(size: CGFloat, weight: NSFont.Weight) -> NSFont {
@@ -489,7 +500,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private var overlayWindow: NSWindow?
     private let rootView = FlippedView(frame: NSRect(x: 0, y: 0, width: 384, height: 180))
     private let backgroundView = FlippedView()
-    private let headerTitle = NSTextField(labelWithString: "Codex Beacon")
+    private let headerTitle = NSTextField(labelWithString: "Navex")
     private let headerSubtitle = NSTextField(labelWithString: "No waiting sessions")
     private let headerUsagePrimary = NSTextField(labelWithString: "")
     private let headerUsageSecondary = NSTextField(labelWithString: "")
@@ -497,12 +508,12 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let rowsContainer = FlippedView(frame: .zero)
     private let stateStore = OverlayStateStore(url: OverlayApp.overlayStateURL())
     private var items: [String: OverlayItem] = [:]
-    private var presentation = OverlayPresentation(width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
+    private var presentation = OverlayPresentation(appDisplayName: "Navex", width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
     private let decoder = JSONDecoder()
     private let snapshotURL = OverlayApp.overlaySnapshotURL()
     private var lastSnapshotRaw = ""
     private var snapshotTimer: Timer?
-    private let showOnLaunch = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_SHOW_ON_LAUNCH"] == "1"
+    private let showOnLaunch = envValue("NAVEX_OVERLAY_SHOW_ON_LAUNCH") == "1"
     private var visibleRowsContentHeight: CGFloat = 1
 
     override init() {
@@ -543,27 +554,27 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private static func overlayStateURL() -> URL {
-        if let explicit = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_STATE_PATH"], !explicit.isEmpty {
+        if let explicit = envValue("NAVEX_OVERLAY_STATE_PATH") {
             return URL(fileURLWithPath: explicit)
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".codex-beacon/overlay-state.json")
+        return home.appendingPathComponent(".navex/overlay-state.json")
     }
 
     private static func overlaySnapshotURL() -> URL {
-        if let explicit = ProcessInfo.processInfo.environment["CODEX_BEACON_OVERLAY_SNAPSHOT_PATH"], !explicit.isEmpty {
+        if let explicit = envValue("NAVEX_OVERLAY_SNAPSHOT_PATH") {
             return URL(fileURLWithPath: explicit)
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".codex-beacon/overlay-snapshot.json")
+        return home.appendingPathComponent(".navex/overlay-snapshot.json")
     }
 
     private func configureStatusItem() {
-        statusItem.button?.title = "Beacon"
+        statusItem.button?.title = statusItemTitle()
         statusItem.button?.font = overlayFont(size: 12, weight: .medium)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggleOverlay)
-        logger.log("configureStatusItem title=Beacon")
+        logger.log("configureStatusItem title=\(statusItemTitle())")
     }
 
     private func configurePanel() {
@@ -700,6 +711,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         if let presentation = snapshot.presentation {
             self.presentation = presentation
         }
+        headerTitle.stringValue = currentAppDisplayName()
 
         let previousIds = Set(items.keys)
         var nextItems: [String: OverlayItem] = [:]
@@ -737,6 +749,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
     private func refresh() {
         logger.log("refresh start items=\(items.count)")
+        headerTitle.stringValue = currentAppDisplayName()
         updateStatusItem()
         headerSubtitle.stringValue = items.isEmpty ? "No waiting sessions" : "\(items.count) waiting"
         updateHeaderUsage()
@@ -814,7 +827,19 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func updateStatusItem() {
-        statusItem.button?.title = items.isEmpty ? "Beacon" : "Beacon \(items.count)"
+        statusItem.button?.title = statusItemTitle()
+    }
+
+    private func statusItemTitle() -> String {
+        let base = currentAppDisplayName()
+        return items.isEmpty ? base : "\(base) \(items.count)"
+    }
+
+    private func currentAppDisplayName() -> String {
+        if let configured = presentation.appDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty {
+            return configured
+        }
+        return "Navex"
     }
 
     private func layoutPanel() {
