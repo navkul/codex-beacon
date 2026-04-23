@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { resolveCodexBinary } from './codex-path.js';
+import { sendEvent } from './ipc.js';
 
 const APPLESCRIPT_TIMEOUT_MS = 300;
 const TTY_TIMEOUT_MS = 100;
@@ -22,6 +23,7 @@ export function launchCodex(args: string[], customName?: string): void {
     argv0: 'codex',
     env: {
       ...process.env,
+      NAVEX_LAUNCH_PID: String(process.pid),
       NAVEX_SESSION_NAME: customName ?? '',
       NAVEX_TERMINAL_APP: terminalApp,
       NAVEX_TERMINAL_WINDOW_ID: metadata.terminalWindowId ?? '',
@@ -32,11 +34,17 @@ export function launchCodex(args: string[], customName?: string): void {
   });
 
   child.on('exit', (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    process.exit(code ?? 0);
+    void sendEvent({
+      type: 'session-exit',
+      launcherPid: process.pid,
+      timestamp: new Date().toISOString()
+    }).catch(() => undefined).finally(() => {
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      process.exit(code ?? 0);
+    });
   });
 
   child.on('error', (error) => {

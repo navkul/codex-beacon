@@ -16,6 +16,7 @@ export async function runSessionStartHook(): Promise<void> {
     cwd: payload.cwd,
     transcriptPath: payload.transcript_path,
     displayName: process.env.NAVEX_SESSION_NAME || undefined,
+    launcherPid: parseNumber(process.env.NAVEX_LAUNCH_PID),
     terminalApp,
     terminalWindowId: process.env.NAVEX_TERMINAL_WINDOW_ID || undefined,
     terminalTabIndex: parseNumber(process.env.NAVEX_TERMINAL_TAB_INDEX),

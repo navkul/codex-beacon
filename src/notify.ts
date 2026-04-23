@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadConfig, overlayHelperLogPath, overlaySnapshotPath, overlayStatePath } from './config.js';
 import { canRepromptSession } from './reprompt.js';
-import { SessionRecord, SessionUsageSnapshot, SummaryState } from './types.js';
+import { SessionRecord, SessionStatus, SessionUsageSnapshot, SummaryState } from './types.js';
 
 interface OverlayCommand {
   executable: string;
@@ -16,6 +16,7 @@ interface OverlayEvent {
   sessionId: string;
   displayName?: string;
   summary?: string;
+  status?: SessionStatus;
   state?: SummaryState;
   usage?: SessionUsageSnapshot;
   timestamp: string;
@@ -62,18 +63,18 @@ export function replaceOverlaySnapshot(sessions: SessionRecord[]): void {
 }
 
 function overlayShowEvent(session: SessionRecord, presentation = currentPresentation()): OverlayEvent {
-  const config = loadConfig();
-  const message = truncate(session.lastSummary ?? 'Ready for your next prompt.', config.overlaySummaryMaxChars);
+  const message = overlaySummary(session);
   return {
     type: 'show',
     sessionId: session.sessionId,
     displayName: session.displayName,
     summary: message,
+    status: session.status,
     state: session.lastSummaryState ?? 'ready',
     usage: session.lastUsage,
     timestamp: new Date().toISOString(),
     focusCommand: focusCommand(session.sessionId),
-    repromptCommand: canRepromptSession(session) ? repromptCommand(session.sessionId) : undefined,
+    repromptCommand: session.status === 'waiting' && canRepromptSession(session) ? repromptCommand(session.sessionId) : undefined,
     presentation
   };
 }
@@ -148,6 +149,14 @@ function currentPresentation(): OverlayPresentation {
     summaryVisible: config.overlayShowSummary,
     summaryMaxLines: config.overlaySummaryMaxLines
   };
+}
+
+function overlaySummary(session: SessionRecord): string {
+  const config = loadConfig();
+  const fallback = session.status === 'active'
+    ? 'Currently working in the terminal.'
+    : 'Ready for your next prompt.';
+  return truncate(session.lastSummary ?? fallback, config.overlaySummaryMaxChars);
 }
 
 function loadOverlaySnapshot(): OverlaySnapshot {

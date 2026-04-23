@@ -22,6 +22,7 @@ export interface SessionRecord {
   sessionId: string;
   displayName: string;
   cwd: string;
+  launcherPid?: number;
   terminalApp?: string;
   terminalWindowId?: string;
   terminalTabIndex?: number;
@@ -50,11 +51,12 @@ export interface HookPayload {
 }
 
 export interface DaemonEvent {
-  type: 'session-stop' | 'session-active' | 'register-session';
-  sessionId: string;
+  type: 'session-stop' | 'session-active' | 'register-session' | 'session-exit';
+  sessionId?: string;
   cwd?: string;
   transcriptPath?: string | null;
   displayName?: string;
+  launcherPid?: number;
   terminalApp?: string;
   terminalWindowId?: string;
   terminalTabIndex?: number;

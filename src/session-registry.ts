@@ -51,6 +51,10 @@ export function allocateDisplayName(registry: RegistryFile, preferred?: string, 
 }
 
 export function upsertFromEvent(event: DaemonEvent): SessionRecord {
+  if (!event.sessionId) {
+    throw new Error(`Cannot upsert session without sessionId for event: ${event.type}`);
+  }
+
   const registry = loadRegistry();
   const existing = registry.sessions[event.sessionId];
   const createdAt = existing?.createdAt ?? event.timestamp ?? nowIso();
@@ -58,6 +62,7 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
     sessionId: event.sessionId,
     displayName: existing?.displayName ?? allocateDisplayName(registry, event.displayName, event.sessionId),
     cwd: event.cwd ?? existing?.cwd ?? process.cwd(),
+    launcherPid: event.launcherPid ?? existing?.launcherPid,
     terminalApp: event.terminalApp ?? existing?.terminalApp,
     terminalWindowId: event.terminalWindowId ?? existing?.terminalWindowId,
     terminalTabIndex: event.terminalTabIndex ?? existing?.terminalTabIndex,
@@ -103,8 +108,55 @@ export function listSessions(): SessionRecord[] {
   return Object.values(loadRegistry().sessions).sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+export function removeSessionsByLauncherPid(launcherPid: number): string[] {
+  const registry = loadRegistry();
+  const removedSessionIds = Object.values(registry.sessions)
+    .filter((session) => session.launcherPid === launcherPid)
+    .map((session) => session.sessionId);
+
+  if (removedSessionIds.length === 0) {
+    return removedSessionIds;
+  }
+
+  for (const sessionId of removedSessionIds) {
+    delete registry.sessions[sessionId];
+  }
+  saveRegistry(registry);
+  return removedSessionIds;
+}
+
+export function pruneStaleSessions(): string[] {
+  const registry = loadRegistry();
+  const removedSessionIds = Object.values(registry.sessions)
+    .filter((session) => !session.launcherPid || !processIsRunning(session.launcherPid))
+    .map((session) => session.sessionId);
+
+  if (removedSessionIds.length === 0) {
+    return removedSessionIds;
+  }
+
+  for (const sessionId of removedSessionIds) {
+    delete registry.sessions[sessionId];
+  }
+  saveRegistry(registry);
+  return removedSessionIds;
+}
+
 function displayNameInUse(registry: RegistryFile, displayName: string, sessionId?: string): boolean {
   return Object.values(registry.sessions).some((session) => {
     return session.sessionId !== sessionId && session.displayName === displayName;
   });
+}
+
+function processIsRunning(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

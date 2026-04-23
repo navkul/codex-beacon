@@ -1,8 +1,8 @@
 import net from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 import { loadConfig, socketPath } from './config.js';
-import { listSessions, upsertFromEvent, setSessionStopSnapshot } from './session-registry.js';
-import { clearSessionNotification, replaceOverlaySnapshot, sendSessionNotification } from './notify.js';
+import { listSessions, pruneStaleSessions, removeSessionsByLauncherPid, setSessionStopSnapshot, upsertFromEvent } from './session-registry.js';
+import { replaceOverlaySnapshot, sendSessionNotification } from './notify.js';
 import { summarizeTranscriptTail } from './summary.js';
 import { DaemonEvent } from './types.js';
 import { usageSnapshotFromTranscript } from './usage.js';
@@ -29,22 +29,37 @@ export function runDaemon(): void {
 
   server.listen(socket);
   server.on('listening', () => {
+    pruneStaleSessions();
     replayWaitingSessions();
   });
 }
 
 function handleEvent(event: DaemonEvent): void {
+  if (event.type === 'session-exit') {
+    if (event.launcherPid) {
+      removeSessionsByLauncherPid(event.launcherPid);
+      replaceOverlaySnapshot(listSessions());
+    }
+    return;
+  }
+
   const session = upsertFromEvent(event);
 
   if (event.type === 'session-active') {
-    clearSessionNotification(event.sessionId);
+    replaceOverlaySnapshot(listSessions());
+    return;
+  }
+
+  if (event.type === 'register-session') {
+    replaceOverlaySnapshot(listSessions());
     return;
   }
 
   if (event.type === 'session-stop') {
     const summary = summarizeTranscriptTail(event.transcriptPath ?? session.transcriptPath, loadConfig());
     const usage = usageSnapshotFromTranscript(event.transcriptPath ?? session.transcriptPath);
-    const updated = setSessionStopSnapshot(event.sessionId, summary.text, summary.state, usage) ?? session;
+    const updated = setSessionStopSnapshot(session.sessionId, summary.text, summary.state, usage) ?? session;
+    replaceOverlaySnapshot(listSessions());
     sendSessionNotification({
       ...updated,
       lastSummary: summary.text,
@@ -55,5 +70,5 @@ function handleEvent(event: DaemonEvent): void {
 }
 
 function replayWaitingSessions(): void {
-  replaceOverlaySnapshot(listSessions().filter((session) => session.status === 'waiting'));
+  replaceOverlaySnapshot(listSessions());
 }
