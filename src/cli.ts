@@ -8,6 +8,8 @@ import { runUserPromptSubmitHook } from './hook-user-prompt-submit.js';
 import { installMessage } from './install.js';
 import { launchCodex } from './launch.js';
 import { APP_CONFIG_KEYS, AppConfigKey, configPath, loadConfig, saveConfig } from './config.js';
+import { sendOverlayControl } from './overlay-control.js';
+import { replaceOverlaySnapshot } from './notify.js';
 import { repromptSession } from './reprompt.js';
 import { listSessions } from './session-registry.js';
 
@@ -51,11 +53,36 @@ program
 
 program
   .command('reprompt')
-  .description('Send a prompt to a tracked session without focusing it')
+  .description('Send and submit a prompt to a tracked session')
   .requiredOption('--session-id <sessionId>')
   .requiredOption('--message <message>')
-  .action((options: { sessionId: string; message: string }) => {
-    repromptSession(options.sessionId, options.message);
+  .action(async (options: { sessionId: string; message: string }) => {
+    await repromptSession(options.sessionId, options.message);
+  });
+
+const overlayCommand = program
+  .command('overlay')
+  .description('Control the floating overlay');
+
+overlayCommand
+  .command('show')
+  .description('Show the overlay if there are live sessions')
+  .action(() => {
+    sendOverlayControl('show');
+  });
+
+overlayCommand
+  .command('hide')
+  .description('Hide the overlay')
+  .action(() => {
+    sendOverlayControl('hide');
+  });
+
+overlayCommand
+  .command('toggle')
+  .description('Toggle overlay visibility')
+  .action(() => {
+    sendOverlayControl('toggle');
   });
 
 program
@@ -124,6 +151,7 @@ configCommand
     const nextValue = parseConfigValue(validKey, value);
     const updated = { ...config, [validKey]: nextValue } as typeof config;
     saveConfig(updated);
+    replaceOverlaySnapshot(listSessions());
     process.stdout.write(`${validKey}=${JSON.stringify(updated[validKey])}\n`);
   });
 
@@ -153,6 +181,8 @@ function parseConfigValue(key: AppConfigKey, raw: string): string | number | boo
       return parseStringValue(raw, key);
     case 'overlayCommand':
       return raw === 'null' ? null : raw;
+    case 'overlayHotkey':
+      return raw === 'null' ? null : parseHotkeyValue(raw);
     case 'overlayShowSummary':
       if (raw === 'true') {
         return true;
@@ -195,4 +225,12 @@ function parseStringValue(raw: string, key: string): string {
     return value;
   }
   throw new Error(`Expected a non-empty string for ${key}`);
+}
+
+function parseHotkeyValue(raw: string): string {
+  const value = raw.trim().toLowerCase();
+  if (!value) {
+    throw new Error('Expected a non-empty hotkey string or null');
+  }
+  return value;
 }

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 
 enum SummaryState: String, Decodable {
@@ -37,6 +38,7 @@ struct SessionUsageSnapshot: Decodable {
 
 struct OverlayPresentation: Decodable {
     let appDisplayName: String?
+    let hotkey: String?
     let width: Double
     let maxVisibleRows: Int
     let summaryVisible: Bool
@@ -69,9 +71,33 @@ struct OverlayItem {
     let repromptCommand: CommandSpec?
 }
 
+enum RepromptDisplayState {
+    case submitting(token: String)
+    case unconfirmed
+
+    var isSubmitting: Bool {
+        if case .submitting = self {
+            return true
+        }
+        return false
+    }
+}
+
+extension Optional where Wrapped == RepromptDisplayState {
+    var isSubmitting: Bool {
+        self?.isSubmitting == true
+    }
+}
+
 struct OverlaySnapshot: Decodable {
     let presentation: OverlayPresentation?
     let items: [OverlayEvent]
+}
+
+struct OverlayControlCommand: Decodable {
+    let action: String
+    let commandId: String
+    let requestedAt: String
 }
 
 struct OverlayStateFile: Codable {
@@ -123,8 +149,19 @@ final class OverlayLogger {
     }
 }
 
+private let overlayIso8601Formatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+}()
+
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+final class OverlayWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }
 
 private func envValue(_ keys: String...) -> String? {
@@ -139,6 +176,257 @@ private func envValue(_ keys: String...) -> String? {
 
 private func overlayFont(size: CGFloat, weight: NSFont.Weight) -> NSFont {
     NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+}
+
+struct HotkeySpec {
+    let normalized: String
+    let display: String
+    let keyCode: UInt32
+    let modifiers: UInt32
+}
+
+enum HotkeyParseError: Error, CustomStringConvertible {
+    case empty
+    case missingKey
+    case duplicateKey
+    case duplicateModifier(String)
+    case unsupportedToken(String)
+
+    var description: String {
+        switch self {
+        case .empty:
+            return "empty hotkey"
+        case .missingKey:
+            return "missing key token"
+        case .duplicateKey:
+            return "multiple key tokens are not supported"
+        case .duplicateModifier(let token):
+            return "duplicate modifier: \(token)"
+        case .unsupportedToken(let token):
+            return "unsupported hotkey token: \(token)"
+        }
+    }
+}
+
+private let hotkeyModifiers: [String: (mask: UInt32, display: String)] = [
+    "cmd": (UInt32(cmdKey), "⌘"),
+    "command": (UInt32(cmdKey), "⌘"),
+    "shift": (UInt32(shiftKey), "⇧"),
+    "ctrl": (UInt32(controlKey), "⌃"),
+    "control": (UInt32(controlKey), "⌃"),
+    "opt": (UInt32(optionKey), "⌥"),
+    "option": (UInt32(optionKey), "⌥"),
+    "alt": (UInt32(optionKey), "⌥")
+]
+
+private let hotkeyKeys: [String: (code: UInt32, display: String)] = [
+    "a": (UInt32(kVK_ANSI_A), "A"),
+    "b": (UInt32(kVK_ANSI_B), "B"),
+    "c": (UInt32(kVK_ANSI_C), "C"),
+    "d": (UInt32(kVK_ANSI_D), "D"),
+    "e": (UInt32(kVK_ANSI_E), "E"),
+    "f": (UInt32(kVK_ANSI_F), "F"),
+    "g": (UInt32(kVK_ANSI_G), "G"),
+    "h": (UInt32(kVK_ANSI_H), "H"),
+    "i": (UInt32(kVK_ANSI_I), "I"),
+    "j": (UInt32(kVK_ANSI_J), "J"),
+    "k": (UInt32(kVK_ANSI_K), "K"),
+    "l": (UInt32(kVK_ANSI_L), "L"),
+    "m": (UInt32(kVK_ANSI_M), "M"),
+    "n": (UInt32(kVK_ANSI_N), "N"),
+    "o": (UInt32(kVK_ANSI_O), "O"),
+    "p": (UInt32(kVK_ANSI_P), "P"),
+    "q": (UInt32(kVK_ANSI_Q), "Q"),
+    "r": (UInt32(kVK_ANSI_R), "R"),
+    "s": (UInt32(kVK_ANSI_S), "S"),
+    "t": (UInt32(kVK_ANSI_T), "T"),
+    "u": (UInt32(kVK_ANSI_U), "U"),
+    "v": (UInt32(kVK_ANSI_V), "V"),
+    "w": (UInt32(kVK_ANSI_W), "W"),
+    "x": (UInt32(kVK_ANSI_X), "X"),
+    "y": (UInt32(kVK_ANSI_Y), "Y"),
+    "z": (UInt32(kVK_ANSI_Z), "Z"),
+    "0": (UInt32(kVK_ANSI_0), "0"),
+    "1": (UInt32(kVK_ANSI_1), "1"),
+    "2": (UInt32(kVK_ANSI_2), "2"),
+    "3": (UInt32(kVK_ANSI_3), "3"),
+    "4": (UInt32(kVK_ANSI_4), "4"),
+    "5": (UInt32(kVK_ANSI_5), "5"),
+    "6": (UInt32(kVK_ANSI_6), "6"),
+    "7": (UInt32(kVK_ANSI_7), "7"),
+    "8": (UInt32(kVK_ANSI_8), "8"),
+    "9": (UInt32(kVK_ANSI_9), "9"),
+    ";": (UInt32(kVK_ANSI_Semicolon), ";"),
+    ",": (UInt32(kVK_ANSI_Comma), ","),
+    ".": (UInt32(kVK_ANSI_Period), "."),
+    "/": (UInt32(kVK_ANSI_Slash), "/"),
+    "'": (UInt32(kVK_ANSI_Quote), "'"),
+    "[": (UInt32(kVK_ANSI_LeftBracket), "["),
+    "]": (UInt32(kVK_ANSI_RightBracket), "]"),
+    "-": (UInt32(kVK_ANSI_Minus), "-"),
+    "=": (UInt32(kVK_ANSI_Equal), "="),
+    "`": (UInt32(kVK_ANSI_Grave), "`"),
+    "space": (UInt32(kVK_Space), "Space"),
+    "return": (UInt32(kVK_Return), "Return"),
+    "enter": (UInt32(kVK_Return), "Return"),
+    "tab": (UInt32(kVK_Tab), "Tab"),
+    "escape": (UInt32(kVK_Escape), "Esc"),
+    "esc": (UInt32(kVK_Escape), "Esc")
+]
+
+private func parseHotkeySpec(_ raw: String?) throws -> HotkeySpec? {
+    guard let raw else {
+        return nil
+    }
+
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if trimmed.isEmpty {
+        throw HotkeyParseError.empty
+    }
+
+    let tokens = trimmed
+        .split(separator: "+")
+        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    if tokens.isEmpty {
+        throw HotkeyParseError.empty
+    }
+
+    var modifierMask: UInt32 = 0
+    var modifierDisplays: [String] = []
+    var seenModifiers = Set<String>()
+    var keyToken: String?
+
+    for token in tokens {
+        if let modifier = hotkeyModifiers[token] {
+            if seenModifiers.contains(modifier.display) {
+                throw HotkeyParseError.duplicateModifier(token)
+            }
+            seenModifiers.insert(modifier.display)
+            modifierMask |= modifier.mask
+            modifierDisplays.append(modifier.display)
+            continue
+        }
+
+        if keyToken != nil {
+            throw HotkeyParseError.duplicateKey
+        }
+        keyToken = token
+    }
+
+    guard let keyToken else {
+        throw HotkeyParseError.missingKey
+    }
+    guard let key = hotkeyKeys[keyToken] else {
+        throw HotkeyParseError.unsupportedToken(keyToken)
+    }
+
+    return HotkeySpec(
+        normalized: trimmed,
+        display: modifierDisplays.joined() + key.display,
+        keyCode: key.code,
+        modifiers: modifierMask
+    )
+}
+
+final class HotkeyController {
+    fileprivate static let signature = OSType(0x4E565858)
+    fileprivate static let hotkeyId: UInt32 = 1
+
+    fileprivate weak var target: OverlayApp?
+    private let logger: OverlayLogger
+    private var eventHandler: EventHandlerRef?
+    private var hotKeyRef: EventHotKeyRef?
+    private var registeredSpec: HotkeySpec?
+
+    init(target: OverlayApp, logger: OverlayLogger) {
+        self.target = target
+        self.logger = logger
+        installHandler()
+    }
+
+    deinit {
+        unregister()
+        if let eventHandler {
+            RemoveEventHandler(eventHandler)
+        }
+    }
+
+    func update(spec: HotkeySpec?) {
+        if registeredSpec?.normalized == spec?.normalized {
+            return
+        }
+
+        unregister()
+        guard let spec else {
+            logger.log("hotkey unregister")
+            return
+        }
+
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: Self.hotkeyId)
+        let status = RegisterEventHotKey(
+            UInt32(spec.keyCode),
+            UInt32(spec.modifiers),
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+        if status == noErr {
+            registeredSpec = spec
+            logger.log("hotkey register spec=\(spec.normalized) display=\(spec.display)")
+        } else {
+            hotKeyRef = nil
+            logger.log("hotkey registerFailed spec=\(spec.normalized) status=\(status)")
+        }
+    }
+
+    private func unregister() {
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+        registeredSpec = nil
+    }
+
+    private func installHandler() {
+        var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            hotkeyEventCallback,
+            1,
+            &eventSpec,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &eventHandler
+        )
+        if status != noErr {
+            logger.log("hotkey handlerInstallFailed status=\(status)")
+        }
+    }
+}
+
+private let hotkeyEventCallback: EventHandlerUPP = { _, eventRef, userData in
+    guard let eventRef, let userData else {
+        return OSStatus(eventNotHandledErr)
+    }
+
+    var hotKeyID = EventHotKeyID()
+    let status = GetEventParameter(
+        eventRef,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &hotKeyID
+    )
+    if status != noErr || hotKeyID.signature != HotkeyController.signature || hotKeyID.id != HotkeyController.hotkeyId {
+        return OSStatus(eventNotHandledErr)
+    }
+
+    let controller = Unmanaged<HotkeyController>.fromOpaque(userData).takeUnretainedValue()
+    controller.target?.handleGlobalToggleHotkey()
+    return noErr
 }
 
 final class OverlayStateStore {
@@ -225,6 +513,7 @@ final class OverlayRowView: NSView {
     init(
         item: OverlayItem,
         presentation: OverlayPresentation,
+        repromptState: RepromptDisplayState?,
         openAction: @escaping (String) -> Void,
         repromptAction: @escaping (String, String) -> Void,
         moveAction: @escaping (String, NSPoint) -> Void
@@ -303,10 +592,10 @@ final class OverlayRowView: NSView {
         repromptField.focusRingType = .none
         repromptField.font = overlayFont(size: 11, weight: .medium)
         repromptField.textColor = NSColor.labelColor.withAlphaComponent(0.92)
-        repromptField.placeholderString = repromptPlaceholder(for: item)
-        repromptField.isEditable = item.status == .waiting && item.repromptCommand != nil
-        repromptField.isSelectable = item.status == .waiting && item.repromptCommand != nil
-        repromptField.stringValue = item.status == .active ? "Working." : ""
+        repromptField.placeholderString = repromptPlaceholder(for: item, repromptState: repromptState)
+        repromptField.isEditable = item.status == .waiting && item.repromptCommand != nil && !repromptState.isSubmitting
+        repromptField.isSelectable = item.status == .waiting && item.repromptCommand != nil && !repromptState.isSubmitting
+        repromptField.stringValue = initialRepromptValue(for: item, repromptState: repromptState)
         repromptField.target = self
         repromptField.action = #selector(submitReprompt(_:))
         repromptField.translatesAutoresizingMaskIntoConstraints = false
@@ -315,7 +604,7 @@ final class OverlayRowView: NSView {
         underline.translatesAutoresizingMaskIntoConstraints = false
         underline.wantsLayer = true
         underline.layer?.cornerRadius = 0.5
-        underline.layer?.backgroundColor = underlineColor(for: item).cgColor
+        underline.layer?.backgroundColor = underlineColor(for: item, repromptState: repromptState).cgColor
 
         repromptContainer.addSubview(repromptField)
         repromptContainer.addSubview(underline)
@@ -365,7 +654,9 @@ final class OverlayRowView: NSView {
         ])
 
         if item.status == .active {
-            startWorkingAnimation()
+            startStatusAnimation(frames: ["Working.", "Working..", "Working...", "Working.."])
+        } else if repromptState.isSubmitting {
+            startStatusAnimation(frames: ["Submitting.", "Submitting..", "Submitting...", "Submitting.."])
         }
     }
 
@@ -494,22 +785,40 @@ final class OverlayRowView: NSView {
         }
     }
 
-    private func repromptPlaceholder(for item: OverlayItem) -> String {
+    private func repromptPlaceholder(for item: OverlayItem, repromptState: RepromptDisplayState?) -> String {
         if item.status == .active {
             return "Working."
+        }
+        if case .unconfirmed = repromptState {
+            return "Reprompt not confirmed"
         }
         return item.repromptCommand == nil ? "Reprompt unavailable" : "Reprompt…"
     }
 
-    private func underlineColor(for item: OverlayItem) -> NSColor {
+    private func initialRepromptValue(for item: OverlayItem, repromptState: RepromptDisplayState?) -> String {
+        if item.status == .active {
+            return "Working."
+        }
+        if repromptState.isSubmitting {
+            return "Submitting."
+        }
+        return ""
+    }
+
+    private func underlineColor(for item: OverlayItem, repromptState: RepromptDisplayState?) -> NSColor {
         if item.status == .active {
             return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.26)
+        }
+        if repromptState.isSubmitting {
+            return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.22)
+        }
+        if case .unconfirmed = repromptState {
+            return NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.24)
         }
         return NSColor.white.withAlphaComponent(item.repromptCommand == nil ? 0.06 : 0.16)
     }
 
-    private func startWorkingAnimation() {
-        let frames = ["Working.", "Working..", "Working...", "Working.."]
+    private func startStatusAnimation(frames: [String]) {
         var index = 0
         repromptField.stringValue = frames[index]
         workingTimer = Timer.scheduledTimer(withTimeInterval: 0.38, repeats: true) { [weak self] timer in
@@ -529,6 +838,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         static let footerHeight: CGFloat = 16
         static let rowSpacing: CGFloat = 10
     }
+    private enum RepromptMetrics {
+        static let confirmationTimeout: TimeInterval = 6
+    }
 
     private let logger = OverlayLogger.shared
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -543,13 +855,18 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let rowsContainer = FlippedView(frame: .zero)
     private let stateStore = OverlayStateStore(url: OverlayApp.overlayStateURL())
     private var items: [String: OverlayItem] = [:]
-    private var presentation = OverlayPresentation(appDisplayName: "Navex", width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
+    private var presentation = OverlayPresentation(appDisplayName: "Navex", hotkey: "cmd+shift+;", width: 384, maxVisibleRows: 4, summaryVisible: true, summaryMaxLines: 2)
     private let decoder = JSONDecoder()
     private let snapshotURL = OverlayApp.overlaySnapshotURL()
+    private let controlURL = OverlayApp.overlayControlURL()
     private var lastSnapshotRaw = ""
     private var snapshotTimer: Timer?
+    private var controlTimer: Timer?
     private let showOnLaunch = envValue("NAVEX_OVERLAY_SHOW_ON_LAUNCH") == "1"
     private var visibleRowsContentHeight: CGFloat = 1
+    private var lastHandledControlId = ""
+    private var repromptStates: [String: RepromptDisplayState] = [:]
+    private lazy var hotkeyController = HotkeyController(target: self, logger: logger)
 
     override init() {
         super.init()
@@ -561,8 +878,10 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         logger.log("applicationDidFinishLaunching activationPolicy=accessory snapshotPath=\(snapshotURL.path)")
         configureStatusItem()
         configurePanel()
+        updateHotkeyRegistration()
         loadSnapshotIfNeeded(reason: "did-finish", allowSameRaw: true)
         startSnapshotPolling()
+        startControlPolling()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else {
                 return
@@ -604,18 +923,27 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         return home.appendingPathComponent(".navex/overlay-snapshot.json")
     }
 
+    private static func overlayControlURL() -> URL {
+        if let explicit = envValue("NAVEX_OVERLAY_CONTROL_PATH") {
+            return URL(fileURLWithPath: explicit)
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".navex/overlay-control.json")
+    }
+
     private func configureStatusItem() {
         statusItem.button?.title = statusItemTitle()
         statusItem.button?.font = overlayFont(size: 12, weight: .medium)
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggleOverlay)
+        statusItem.button?.toolTip = statusItemTooltip()
         logger.log("configureStatusItem title=\(statusItemTitle())")
     }
 
     private func configurePanel() {
         logger.log("configurePanel begin")
 
-        let window = NSWindow(
+        let window = OverlayWindow(
             contentRect: NSRect(x: 0, y: 0, width: 384, height: 180),
             styleMask: [.borderless],
             backing: .buffered,
@@ -709,6 +1037,13 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func startControlPolling() {
+        controlTimer?.invalidate()
+        controlTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            self?.applyOverlayControlIfNeeded()
+        }
+    }
+
     private func loadSnapshotIfNeeded(reason: String, allowSameRaw: Bool) {
         guard let loaded = loadSnapshot() else {
             return
@@ -731,6 +1066,43 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         return (raw, snapshot)
     }
 
+    private func applyOverlayControlIfNeeded() {
+        guard let data = try? Data(contentsOf: controlURL),
+              let command = try? decoder.decode(OverlayControlCommand.self, from: data) else {
+            return
+        }
+
+        if command.commandId == lastHandledControlId {
+            return
+        }
+        lastHandledControlId = command.commandId
+
+        guard let requestedAt = overlayIso8601Formatter.date(from: command.requestedAt) else {
+            logger.log("applyOverlayControl invalidDate commandId=\(command.commandId)")
+            return
+        }
+        if Date().timeIntervalSince(requestedAt) > 20 {
+            logger.log("applyOverlayControl stale action=\(command.action) commandId=\(command.commandId)")
+            return
+        }
+
+        logger.log("applyOverlayControl action=\(command.action) commandId=\(command.commandId)")
+        switch command.action {
+        case "show":
+            showOverlay(reason: "control-show")
+        case "hide":
+            hideOverlay(reason: "control-hide")
+        case "toggle":
+            if overlayWindow?.isVisible == true {
+                hideOverlay(reason: "control-toggle-hide")
+            } else {
+                showOverlay(reason: "control-toggle-show")
+            }
+        default:
+            break
+        }
+    }
+
     private func applySnapshot(
         raw: String,
         snapshot: OverlaySnapshot,
@@ -747,6 +1119,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             self.presentation = presentation
         }
         headerTitle.stringValue = currentAppDisplayName()
+        updateHotkeyRegistration()
 
         let previousIds = Set(items.keys)
         var nextItems: [String: OverlayItem] = [:]
@@ -774,6 +1147,10 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         items = nextItems
         for sessionId in removedIds {
             stateStore.remove(sessionId: sessionId)
+            repromptStates.removeValue(forKey: sessionId)
+        }
+        for item in nextItems.values where item.status == .active {
+            repromptStates.removeValue(forKey: item.sessionId)
         }
         logger.log("applySnapshot reason=\(reason) items=\(items.count) added=\(addedIds.count) removed=\(removedIds.count) render=\(shouldRender)")
         if shouldRender {
@@ -811,6 +1188,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             let row = OverlayRowView(
                 item: item,
                 presentation: presentation,
+                repromptState: repromptStates[item.sessionId],
                 openAction: { [weak self] sessionId in
                     self?.openSession(sessionId: sessionId)
                 },
@@ -864,6 +1242,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
     private func updateStatusItem() {
         statusItem.button?.title = statusItemTitle()
+        statusItem.button?.toolTip = statusItemTooltip()
     }
 
     private func statusItemTitle() -> String {
@@ -876,6 +1255,13 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return configured
         }
         return "Navex"
+    }
+
+    private func statusItemTooltip() -> String {
+        if let spec = resolvedHotkeySpec() {
+            return "\(currentAppDisplayName()) overlay toggle: \(spec.display)"
+        }
+        return "\(currentAppDisplayName()) overlay"
     }
 
     private func headerSubtitleText() -> String {
@@ -1028,6 +1414,13 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    fileprivate func handleGlobalToggleHotkey() {
+        logger.log("hotkey pressed")
+        DispatchQueue.main.async { [weak self] in
+            self?.toggleOverlay()
+        }
+    }
+
     private func showOverlay(reason: String) {
         guard !items.isEmpty else {
             return
@@ -1056,6 +1449,19 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         window.orderOut(nil)
     }
 
+    private func updateHotkeyRegistration() {
+        hotkeyController.update(spec: resolvedHotkeySpec())
+    }
+
+    private func resolvedHotkeySpec() -> HotkeySpec? {
+        do {
+            return try parseHotkeySpec(presentation.hotkey)
+        } catch {
+            logger.log("hotkey parseFailed raw=\(presentation.hotkey ?? "nil") error=\(error)")
+            return nil
+        }
+    }
+
     private func openSession(sessionId: String) {
         guard let item = items[sessionId] else {
             return
@@ -1070,14 +1476,40 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return
         }
 
+        let token = UUID().uuidString
+        repromptStates[sessionId] = .submitting(token: token)
+        refresh()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + RepromptMetrics.confirmationTimeout) { [weak self] in
+            guard let self else {
+                return
+            }
+            guard case .submitting(let currentToken) = self.repromptStates[sessionId], currentToken == token else {
+                return
+            }
+            if self.items[sessionId]?.status == .active {
+                self.repromptStates.removeValue(forKey: sessionId)
+            } else {
+                self.repromptStates[sessionId] = .unconfirmed
+            }
+            self.refresh()
+        }
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let success = self?.launch(repromptCommand, extraArgs: [text], waitForExit: true) ?? false
             DispatchQueue.main.async {
-                guard success else {
-                    NSSound.beep()
+                guard let self else {
                     return
                 }
-                self?.overlayWindow?.orderOut(nil)
+                if success {
+                    return
+                }
+                guard case .submitting(let currentToken) = self.repromptStates[sessionId], currentToken == token else {
+                    return
+                }
+                self.repromptStates[sessionId] = .unconfirmed
+                self.refresh()
+                NSSound.beep()
             }
         }
     }

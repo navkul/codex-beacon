@@ -68,6 +68,7 @@ export interface DaemonEvent {
 export interface AppConfig {
   appDisplayName: string;
   overlayCommand: string | null;
+  overlayHotkey: string | null;
   overlayWidth: number;
   overlayMaxVisibleRows: number;
   overlayShowSummary: boolean;

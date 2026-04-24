@@ -13,6 +13,7 @@ const LEGACY_APP_ROOT = path.join(homedir(), '.codex-beacon');
 const DEFAULT_CONFIG: AppConfig = {
   appDisplayName: 'Navex',
   overlayCommand: null,
+  overlayHotkey: 'cmd+option+k',
   overlayWidth: 384,
   overlayMaxVisibleRows: 4,
   overlayShowSummary: true,
@@ -25,6 +26,7 @@ const DEFAULT_CONFIG: AppConfig = {
 export const APP_CONFIG_KEYS = [
   'appDisplayName',
   'overlayCommand',
+  'overlayHotkey',
   'overlayWidth',
   'overlayMaxVisibleRows',
   'overlayShowSummary',
@@ -64,6 +66,10 @@ export function overlayStatePath(): string {
 
 export function overlaySnapshotPath(): string {
   return path.join(ensureAppRoot(), 'overlay-snapshot.json');
+}
+
+export function overlayControlPath(): string {
+  return path.join(ensureAppRoot(), 'overlay-control.json');
 }
 
 export function overlayHelperLogPath(): string {
@@ -110,6 +116,12 @@ function normalizeConfig(config: LegacyConfig): AppConfig {
       ? config.appDisplayName.trim()
       : DEFAULT_CONFIG.appDisplayName,
     overlayCommand: typeof config.overlayCommand === 'string' ? config.overlayCommand : DEFAULT_CONFIG.overlayCommand,
+    overlayHotkey:
+      typeof config.overlayHotkey === 'string' && config.overlayHotkey.trim()
+        ? config.overlayHotkey.trim()
+        : config.overlayHotkey === null
+          ? null
+          : DEFAULT_CONFIG.overlayHotkey,
     overlayWidth: typeof config.overlayWidth === 'number' ? config.overlayWidth : DEFAULT_CONFIG.overlayWidth,
     overlayMaxVisibleRows:
       typeof config.overlayMaxVisibleRows === 'number' ? config.overlayMaxVisibleRows : DEFAULT_CONFIG.overlayMaxVisibleRows,

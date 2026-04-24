@@ -1,9 +1,10 @@
-import { ChildProcess, spawn } from 'node:child_process';
+import { ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { loadConfig, overlayHelperLogPath, overlaySnapshotPath, overlayStatePath } from './config.js';
+import { loadConfig, overlayControlPath, overlayHelperLogPath, overlaySnapshotPath, overlayStatePath } from './config.js';
 import { canRepromptSession } from './reprompt.js';
+import { listSessions } from './session-registry.js';
 import { SessionRecord, SessionStatus, SessionUsageSnapshot, SummaryState } from './types.js';
 
 interface OverlayCommand {
@@ -27,6 +28,7 @@ interface OverlayEvent {
 
 interface OverlayPresentation {
   appDisplayName: string;
+  hotkey: string | null;
   width: number;
   maxVisibleRows: number;
   summaryVisible: boolean;
@@ -95,19 +97,28 @@ function sendOverlayEvent(event: OverlayEvent): void {
     return;
   }
 
-  ensureOverlayProcess(event.type === 'show');
+  ensureOverlayHelper(event.type === 'show');
 }
 
-function ensureOverlayProcess(showOnLaunch: boolean): ChildProcess {
+export function ensureOverlayHelper(showOnLaunch: boolean): ChildProcess | undefined {
   if (overlayProcess && !overlayProcess.killed) {
     return overlayProcess;
   }
+  if (overlayHelperIsRunning()) {
+    return undefined;
+  }
+
+  // Rebuild the persisted snapshot before launching the helper so stale rows
+  // are not shown during helper bootstrap after a daemon/helper restart.
+  replaceOverlaySnapshot(listSessions());
 
   const command = overlayCommand();
   const child = spawn(command, [], {
+    detached: true,
     stdio: ['ignore', 'ignore', 'ignore'],
     env: {
       ...process.env,
+      NAVEX_OVERLAY_CONTROL_PATH: overlayControlPath(),
       NAVEX_OVERLAY_STATE_PATH: overlayStatePath(),
       NAVEX_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
       NAVEX_OVERLAY_LOG_PATH: overlayHelperLogPath(),
@@ -120,6 +131,7 @@ function ensureOverlayProcess(showOnLaunch: boolean): ChildProcess {
   child.on('error', () => {
     overlayProcess = undefined;
   });
+  child.unref();
   overlayProcess = child;
   return child;
 }
@@ -144,6 +156,7 @@ function currentPresentation(): OverlayPresentation {
   const config = loadConfig();
   return {
     appDisplayName: config.appDisplayName,
+    hotkey: config.overlayHotkey,
     width: config.overlayWidth,
     maxVisibleRows: config.overlayMaxVisibleRows,
     summaryVisible: config.overlayShowSummary,
@@ -190,6 +203,17 @@ function overlayCommand(): string {
   }
 
   return path.join(process.cwd(), 'dist', 'macos', 'NavexOverlay');
+}
+
+function overlayHelperIsRunning(): boolean {
+  try {
+    execFileSync('pgrep', ['-x', path.basename(overlayCommand())], {
+      stdio: 'ignore'
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function focusCommand(sessionId: string): OverlayCommand {
