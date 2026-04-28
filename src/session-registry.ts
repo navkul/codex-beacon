@@ -2,13 +2,14 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { registryPath } from './config.js';
 import { DaemonEvent, RegistryFile, SessionRecord, SessionUsageSnapshot } from './types.js';
 
+const DEFAULT_NAME_PATTERN = /^codex \d+$/;
+
 function nowIso(): string {
   return new Date().toISOString();
 }
 
 function emptyRegistry(): RegistryFile {
   return {
-    nextDefaultName: 1,
     sessions: {}
   };
 }
@@ -20,7 +21,13 @@ export function loadRegistry(): RegistryFile {
     saveRegistry(initial);
     return initial;
   }
-  return JSON.parse(readFileSync(file, 'utf8')) as RegistryFile;
+  const parsed = JSON.parse(readFileSync(file, 'utf8')) as RegistryFile;
+  const before = JSON.stringify(parsed);
+  normalizeRegistry(parsed);
+  if (JSON.stringify(parsed) !== before) {
+    saveRegistry(parsed);
+  }
+  return parsed;
 }
 
 export function saveRegistry(registry: RegistryFile): void {
@@ -41,13 +48,7 @@ export function allocateDisplayName(registry: RegistryFile, preferred?: string, 
     return `${requested} ${suffix}`;
   }
 
-  while (true) {
-    const candidate = `codex ${registry.nextDefaultName}`;
-    registry.nextDefaultName += 1;
-    if (!displayNameInUse(registry, candidate, sessionId)) {
-      return candidate;
-    }
-  }
+  return nextDefaultDisplayName(registry, sessionId);
 }
 
 export function upsertFromEvent(event: DaemonEvent): SessionRecord {
@@ -58,9 +59,11 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
   const registry = loadRegistry();
   const existing = registry.sessions[event.sessionId];
   const createdAt = existing?.createdAt ?? event.timestamp ?? nowIso();
+  const isCustomName = existing?.isCustomName ?? isRequestedCustomName(event.displayName, existing);
   const session: SessionRecord = {
     sessionId: event.sessionId,
     displayName: existing?.displayName ?? allocateDisplayName(registry, event.displayName, event.sessionId),
+    isCustomName,
     cwd: event.cwd ?? existing?.cwd ?? process.cwd(),
     launcherPid: event.launcherPid ?? existing?.launcherPid,
     terminalApp: event.terminalApp ?? existing?.terminalApp,
@@ -77,6 +80,7 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
     status: event.type === 'session-stop' ? 'waiting' : 'active'
   };
   registry.sessions[event.sessionId] = session;
+  normalizeRegistry(registry);
   saveRegistry(registry);
   return session;
 }
@@ -105,7 +109,7 @@ export function getSession(sessionId: string): SessionRecord | undefined {
 }
 
 export function listSessions(): SessionRecord[] {
-  return Object.values(loadRegistry().sessions).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return Object.values(loadRegistry().sessions).sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { numeric: true }));
 }
 
 export function removeSessionsByLauncherPid(launcherPid: number): string[] {
@@ -121,6 +125,7 @@ export function removeSessionsByLauncherPid(launcherPid: number): string[] {
   for (const sessionId of removedSessionIds) {
     delete registry.sessions[sessionId];
   }
+  normalizeRegistry(registry);
   saveRegistry(registry);
   return removedSessionIds;
 }
@@ -138,8 +143,63 @@ export function pruneStaleSessions(): string[] {
   for (const sessionId of removedSessionIds) {
     delete registry.sessions[sessionId];
   }
+  normalizeRegistry(registry);
   saveRegistry(registry);
   return removedSessionIds;
+}
+
+function normalizeRegistry(registry: RegistryFile): void {
+  delete (registry as RegistryFile & { nextDefaultName?: number }).nextDefaultName;
+
+  for (const session of Object.values(registry.sessions)) {
+    session.isCustomName ??= !DEFAULT_NAME_PATTERN.test(session.displayName);
+  }
+
+  const defaultSessions = Object.values(registry.sessions)
+    .filter((session) => !session.isCustomName)
+    .sort((a, b) => {
+      const byCreatedAt = a.createdAt.localeCompare(b.createdAt);
+      return byCreatedAt === 0 ? a.sessionId.localeCompare(b.sessionId) : byCreatedAt;
+    });
+
+  const customNames = new Set(
+    Object.values(registry.sessions)
+      .filter((session) => session.isCustomName)
+      .map((session) => session.displayName)
+  );
+  let nextNumber = 1;
+
+  for (const session of defaultSessions) {
+    while (customNames.has(`codex ${nextNumber}`)) {
+      nextNumber += 1;
+    }
+    session.displayName = `codex ${nextNumber}`;
+    nextNumber += 1;
+  }
+}
+
+function nextDefaultDisplayName(registry: RegistryFile, sessionId?: string): string {
+  const usedNames = new Set(
+    Object.values(registry.sessions)
+      .filter((session) => session.sessionId !== sessionId)
+      .map((session) => session.displayName)
+  );
+  let nextNumber = 1;
+  while (usedNames.has(`codex ${nextNumber}`)) {
+    nextNumber += 1;
+  }
+  return `codex ${nextNumber}`;
+}
+
+function isRequestedCustomName(preferred: string | undefined, existing: SessionRecord | undefined): boolean {
+  const requested = preferred?.trim();
+  if (requested) {
+    return true;
+  }
+  if (existing?.isCustomName !== undefined) {
+    return existing.isCustomName;
+  }
+  return existing ? !DEFAULT_NAME_PATTERN.test(existing.displayName) : false;
 }
 
 function displayNameInUse(registry: RegistryFile, displayName: string, sessionId?: string): boolean {

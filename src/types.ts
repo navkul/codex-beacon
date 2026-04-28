@@ -21,6 +21,7 @@ export interface SessionUsageSnapshot {
 export interface SessionRecord {
   sessionId: string;
   displayName: string;
+  isCustomName?: boolean;
   cwd: string;
   launcherPid?: number;
   terminalApp?: string;
@@ -38,7 +39,6 @@ export interface SessionRecord {
 }
 
 export interface RegistryFile {
-  nextDefaultName: number;
   sessions: Record<string, SessionRecord>;
 }
 
