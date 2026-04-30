@@ -3,6 +3,7 @@ import { AppConfig, SummaryResult, SummaryState, SummaryStyle } from './types.js
 
 const DEFAULT_SUMMARY = 'Ready for your next prompt.';
 const GENERIC_SENTENCE = /^(done|fixed|implemented|updated|ready|okay|ok|complete)\.?$/i;
+const STATE_ONLY_SENTENCE = /^(done|blocked|failed|needs input|ready)[:\s\-–.]*$/i;
 const ACTION_PATTERN = /\b(fixed|implemented|added|updated|wired|built|refactored|changed|completed|resolved|summarized)\b/i;
 const BLOCKED_PATTERN = /\b(blocked|waiting on|needs approval|need approval|permission|cannot continue|can't continue|requires approval)\b/i;
 const FAILED_PATTERN = /\b(test(?:s)? failed|failing|failed|error|exception|traceback|stack trace|lint failed|build failed)\b/i;
@@ -29,15 +30,14 @@ export function summarizeTranscriptTail(transcriptPath: string | null | undefine
     if (!normalized) {
       continue;
     }
-    const state = classifySummaryState(normalized);
     const summary = config.overlaySummaryStyle === 'raw'
       ? normalized
-      : buildSmartSummary(normalized, state);
+      : buildSmartSummary(normalized);
 
     if (summary) {
       return {
         text: limitSummary(summary, config),
-        state
+        state: classifySummaryState(summary)
       };
     }
   }
@@ -155,7 +155,7 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-function buildSmartSummary(text: string, state: SummaryState): string | undefined {
+function buildSmartSummary(text: string): string | undefined {
   const fragments = candidateFragments(text);
   const meaningful = chooseMeaningfulFragment(fragments) ?? chooseMeaningfulFragment([text]);
   if (!meaningful) {
@@ -167,7 +167,7 @@ function buildSmartSummary(text: string, state: SummaryState): string | undefine
     return undefined;
   }
 
-  return addStatePrefix(body, state);
+  return body;
 }
 
 function candidateFragments(text: string): string[] {
@@ -188,6 +188,12 @@ function chooseMeaningfulFragment(fragments: string[]): string | undefined {
 
 function scoreFragment(fragment: string): number {
   if (GENERIC_SENTENCE.test(fragment)) {
+    return -100;
+  }
+  if (STATE_ONLY_SENTENCE.test(fragment)) {
+    return -100;
+  }
+  if (!/[A-Za-z0-9]/.test(fragment)) {
     return -100;
   }
 
@@ -224,32 +230,6 @@ function classifySummaryState(text: string): SummaryState {
     return 'done';
   }
   return 'ready';
-}
-
-function addStatePrefix(text: string, state: SummaryState): string {
-  const existingPrefix = /^(done|blocked|failed|needs input|ready):/i;
-  if (existingPrefix.test(text)) {
-    return text;
-  }
-
-  const label = summaryLabel(state);
-  return `${label}: ${text}`;
-}
-
-function summaryLabel(state: SummaryState): string {
-  switch (state) {
-    case 'done':
-      return 'Done';
-    case 'blocked':
-      return 'Blocked';
-    case 'failed':
-      return 'Failed';
-    case 'needs-input':
-      return 'Needs Input';
-    case 'ready':
-    default:
-      return 'Ready';
-  }
 }
 
 function limitSummary(text: string, config: AppConfig): string {
