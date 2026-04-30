@@ -1,4 +1,5 @@
-export type SessionStatus = 'active' | 'waiting';
+export type SessionStatus = 'active' | 'waiting' | 'done' | 'failed';
+export type SessionKind = 'local-interactive' | 'cloud-task';
 export type SummaryState = 'ready' | 'done' | 'blocked' | 'failed' | 'needs-input';
 export type SummaryStyle = 'smart' | 'raw';
 
@@ -20,6 +21,7 @@ export interface SessionUsageSnapshot {
 
 export interface SessionRecord {
   sessionId: string;
+  kind?: SessionKind;
   displayName: string;
   isCustomName?: boolean;
   cwd: string;
@@ -36,6 +38,23 @@ export interface SessionRecord {
   lastSummaryState?: SummaryState;
   lastUsage?: SessionUsageSnapshot;
   status: SessionStatus;
+  cloudTask?: CloudTaskSession;
+}
+
+export interface CloudTaskSession {
+  taskId: string;
+  url?: string;
+  title?: string;
+  cloudStatus: string;
+  updatedAt?: string;
+  environmentId?: string | null;
+  environmentLabel?: string | null;
+  branch?: string | null;
+  attempts?: number;
+  filesChanged?: number;
+  linesAdded?: number;
+  linesRemoved?: number;
+  isReview?: boolean;
 }
 
 export interface RegistryFile {

@@ -1,11 +1,14 @@
 import net from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
+import { syncCloudTasksQuietly } from './cloud.js';
 import { loadConfig, socketPath } from './config.js';
 import { listSessions, pruneStaleSessions, removeSessionsByLauncherPid, setSessionStopSnapshot, upsertFromEvent } from './session-registry.js';
 import { replaceOverlaySnapshot, sendSessionNotification } from './notify.js';
 import { summarizeTranscriptTail } from './summary.js';
 import { DaemonEvent } from './types.js';
 import { usageSnapshotFromTranscript } from './usage.js';
+
+const CLOUD_SYNC_INTERVAL_MS = 60_000;
 
 export function runDaemon(): void {
   const socket = socketPath();
@@ -30,8 +33,16 @@ export function runDaemon(): void {
   server.listen(socket);
   server.on('listening', () => {
     pruneStaleSessions();
+    syncCloudTasksQuietly({ limit: '20' });
     replayWaitingSessions();
+    startCloudSyncTimer();
   });
+}
+
+function startCloudSyncTimer(): void {
+  setInterval(() => {
+    syncCloudTasksQuietly({ limit: '20' });
+  }, CLOUD_SYNC_INTERVAL_MS).unref();
 }
 
 function handleEvent(event: DaemonEvent): void {

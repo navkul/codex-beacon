@@ -13,6 +13,8 @@ enum SummaryState: String, Decodable {
 enum SessionStatus: String, Decodable {
     case active
     case waiting
+    case done
+    case failed
 }
 
 struct CommandSpec: Decodable {
@@ -50,7 +52,11 @@ struct OverlayEvent: Decodable {
     let sessionId: String
     let displayName: String?
     let summary: String?
+    let kind: String?
+    let sourceLabel: String?
     let status: SessionStatus?
+    let cloudStatus: String?
+    let cloudDetail: String?
     let state: SummaryState?
     let usage: SessionUsageSnapshot?
     let timestamp: String?
@@ -63,7 +69,11 @@ struct OverlayItem {
     let sessionId: String
     let displayName: String
     let summary: String
+    let kind: String
+    let sourceLabel: String?
     let status: SessionStatus
+    let cloudStatus: String?
+    let cloudDetail: String?
     let state: SummaryState
     let usage: SessionUsageSnapshot?
     let timestamp: String
@@ -500,6 +510,7 @@ final class OverlayRowView: NSView {
     let sessionId: String
 
     private let status: SessionStatus
+    private let kind: String
     private let openAction: (String) -> Void
     private let repromptAction: (String, String) -> Void
     private let moveAction: (String, NSPoint) -> Void
@@ -520,6 +531,7 @@ final class OverlayRowView: NSView {
     ) {
         self.sessionId = item.sessionId
         self.status = item.status
+        self.kind = item.kind
         self.openAction = openAction
         self.repromptAction = repromptAction
         self.moveAction = moveAction
@@ -540,6 +552,17 @@ final class OverlayRowView: NSView {
 
         let title = label(item.displayName, size: 13, color: NSColor.labelColor.withAlphaComponent(0.95), weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
+
+        let sourceIcon = NSImageView()
+        sourceIcon.translatesAutoresizingMaskIntoConstraints = false
+        sourceIcon.image = NSImage(
+            systemSymbolName: item.kind == "cloud-task" ? "cloud" : "terminal",
+            accessibilityDescription: item.sourceLabel ?? "Local"
+        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+        sourceIcon.contentTintColor = item.kind == "cloud-task"
+            ? NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.95)
+            : NSColor.secondaryLabelColor.withAlphaComponent(0.82)
+        sourceIcon.symbolConfiguration = .init(pointSize: 12, weight: .medium)
 
         let actionTint = NSColor.tertiaryLabelColor.withAlphaComponent(0.88)
 
@@ -566,6 +589,9 @@ final class OverlayRowView: NSView {
         titleRow.translatesAutoresizingMaskIntoConstraints = false
         titleRow.setContentCompressionResistancePriority(.required, for: .vertical)
         titleRow.setContentHuggingPriority(.required, for: .vertical)
+        if item.kind == "cloud-task" {
+            titleRow.addArrangedSubview(sourceIcon)
+        }
         titleRow.addArrangedSubview(title)
         titleRow.addArrangedSubview(dot)
 
@@ -593,8 +619,8 @@ final class OverlayRowView: NSView {
         repromptField.font = overlayFont(size: 11, weight: .medium)
         repromptField.textColor = NSColor.labelColor.withAlphaComponent(0.92)
         repromptField.placeholderString = repromptPlaceholder(for: item, repromptState: repromptState)
-        repromptField.isEditable = item.status == .waiting && item.repromptCommand != nil && !repromptState.isSubmitting
-        repromptField.isSelectable = item.status == .waiting && item.repromptCommand != nil && !repromptState.isSubmitting
+        repromptField.isEditable = item.status == .waiting && item.repromptCommand != nil && item.kind != "cloud-task" && !repromptState.isSubmitting
+        repromptField.isSelectable = item.status == .waiting && item.repromptCommand != nil && item.kind != "cloud-task" && !repromptState.isSubmitting
         repromptField.stringValue = initialRepromptValue(for: item, repromptState: repromptState)
         repromptField.target = self
         repromptField.action = #selector(submitReprompt(_:))
@@ -627,6 +653,8 @@ final class OverlayRowView: NSView {
             widthAnchor.constraint(equalToConstant: CGFloat(presentation.width) - 32),
             dot.widthAnchor.constraint(equalToConstant: Metrics.dotSize),
             dot.heightAnchor.constraint(equalToConstant: Metrics.dotSize),
+            sourceIcon.widthAnchor.constraint(equalToConstant: 14),
+            sourceIcon.heightAnchor.constraint(equalToConstant: 14),
             title.widthAnchor.constraint(lessThanOrEqualTo: contentColumn.widthAnchor),
             summary.widthAnchor.constraint(equalTo: contentColumn.widthAnchor),
             summary.heightAnchor.constraint(greaterThanOrEqualToConstant: Metrics.summaryMinHeight),
@@ -653,7 +681,7 @@ final class OverlayRowView: NSView {
             actionButtonsStack.widthAnchor.constraint(equalToConstant: Metrics.actionButtonSize)
         ])
 
-        if item.status == .active {
+        if item.status == .active && item.kind != "cloud-task" {
             startStatusAnimation(frames: ["Working.", "Working..", "Working...", "Working.."])
         } else if repromptState.isSubmitting {
             startStatusAnimation(frames: ["Submitting.", "Submitting..", "Submitting...", "Submitting.."])
@@ -767,7 +795,7 @@ final class OverlayRowView: NSView {
     }
 
     private func stateColor(_ state: SummaryState) -> NSColor {
-        if status == .active {
+        if status == .active && kind != "cloud-task" {
             return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.98)
         }
 
@@ -786,6 +814,9 @@ final class OverlayRowView: NSView {
     }
 
     private func repromptPlaceholder(for item: OverlayItem, repromptState: RepromptDisplayState?) -> String {
+        if item.kind == "cloud-task" {
+            return cloudStatusText(for: item)
+        }
         if item.status == .active {
             return "Working."
         }
@@ -796,6 +827,9 @@ final class OverlayRowView: NSView {
     }
 
     private func initialRepromptValue(for item: OverlayItem, repromptState: RepromptDisplayState?) -> String {
+        if item.kind == "cloud-task" {
+            return cloudStatusText(for: item)
+        }
         if item.status == .active {
             return "Working."
         }
@@ -806,6 +840,9 @@ final class OverlayRowView: NSView {
     }
 
     private func underlineColor(for item: OverlayItem, repromptState: RepromptDisplayState?) -> NSColor {
+        if item.kind == "cloud-task" {
+            return NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.18)
+        }
         if item.status == .active {
             return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.26)
         }
@@ -829,6 +866,17 @@ final class OverlayRowView: NSView {
             index = (index + 1) % frames.count
             self.repromptField.stringValue = frames[index]
         }
+    }
+
+    private func cloudStatusText(for item: OverlayItem) -> String {
+        guard let cloudStatus = item.cloudStatus?.trimmingCharacters(in: .whitespacesAndNewlines), !cloudStatus.isEmpty else {
+            return "Cloud task"
+        }
+        let statusText = "Cloud \(cloudStatus)"
+        guard let detail = item.cloudDetail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
+            return statusText
+        }
+        return "\(statusText) · \(detail)"
     }
 }
 
@@ -1132,7 +1180,11 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 sessionId: event.sessionId,
                 displayName: event.displayName ?? "Codex",
                 summary: event.summary ?? "Ready for your next prompt.",
+                kind: event.kind ?? "local-interactive",
+                sourceLabel: event.sourceLabel,
                 status: event.status ?? .waiting,
+                cloudStatus: event.cloudStatus,
+                cloudDetail: event.cloudDetail,
                 state: event.state ?? .ready,
                 usage: event.usage,
                 timestamp: event.timestamp ?? "",
@@ -1155,7 +1207,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         logger.log("applySnapshot reason=\(reason) items=\(items.count) added=\(addedIds.count) removed=\(removedIds.count) render=\(shouldRender)")
         if shouldRender {
             refresh()
-            if !addedIds.isEmpty && addedIds.contains(where: { nextItems[$0]?.status == .waiting }) {
+            if !addedIds.isEmpty && addedIds.contains(where: { nextItems[$0]?.status == .waiting || nextItems[$0]?.kind == "cloud-task" }) {
                 showOverlay(reason: reason)
             } else if items.isEmpty && !removedIds.isEmpty {
                 hideOverlay(reason: "\(reason)-clear")
@@ -1269,15 +1321,29 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return "No live sessions"
         }
 
-        let waitingCount = items.values.filter { $0.status == .waiting }.count
-        let activeCount = items.count - waitingCount
-        if waitingCount == 0 {
-            return "\(items.count) live"
+        let cloudCount = items.values.filter { $0.kind == "cloud-task" }.count
+        let waitingCount = items.values.filter { $0.kind != "cloud-task" && $0.status == .waiting }.count
+        let activeCount = items.values.filter { $0.kind != "cloud-task" && $0.status == .active }.count
+        if cloudCount > 0 && waitingCount == 0 && activeCount == 0 {
+            return "\(cloudCount) cloud"
         }
-        if activeCount == 0 {
+        if waitingCount == 0 && cloudCount == 0 {
+            return "\(activeCount) live"
+        }
+        if activeCount == 0 && cloudCount == 0 {
             return "\(waitingCount) waiting"
         }
-        return "\(items.count) live · \(waitingCount) waiting"
+        var parts: [String] = []
+        if activeCount > 0 {
+            parts.append("\(activeCount) live")
+        }
+        if waitingCount > 0 {
+            parts.append("\(waitingCount) waiting")
+        }
+        if cloudCount > 0 {
+            parts.append("\(cloudCount) cloud")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func layoutPanel() {

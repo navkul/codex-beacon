@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { registryPath } from './config.js';
-import { DaemonEvent, RegistryFile, SessionRecord, SessionUsageSnapshot } from './types.js';
+import { CloudTaskSession, DaemonEvent, RegistryFile, SessionRecord, SessionUsageSnapshot, SummaryState } from './types.js';
 
 const DEFAULT_NAME_PATTERN = /^codex \d+$/;
 
@@ -62,6 +62,7 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
   const isCustomName = existing?.isCustomName ?? isRequestedCustomName(event.displayName, existing);
   const session: SessionRecord = {
     sessionId: event.sessionId,
+    kind: existing?.kind ?? 'local-interactive',
     displayName: existing?.displayName ?? allocateDisplayName(registry, event.displayName, event.sessionId),
     isCustomName,
     cwd: event.cwd ?? existing?.cwd ?? process.cwd(),
@@ -77,7 +78,8 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
     lastSummary: existing?.lastSummary,
     lastSummaryState: existing?.lastSummaryState,
     lastUsage: existing?.lastUsage,
-    status: event.type === 'session-stop' ? 'waiting' : 'active'
+    status: event.type === 'session-stop' ? 'waiting' : 'active',
+    cloudTask: existing?.cloudTask
   };
   registry.sessions[event.sessionId] = session;
   normalizeRegistry(registry);
@@ -109,7 +111,55 @@ export function getSession(sessionId: string): SessionRecord | undefined {
 }
 
 export function listSessions(): SessionRecord[] {
-  return Object.values(loadRegistry().sessions).sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { numeric: true }));
+  const registry = loadRegistry();
+  pruneStaleLocalSessions(registry);
+  saveRegistry(registry);
+  return Object.values(registry.sessions).sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { numeric: true }));
+}
+
+export function upsertCloudTask(task: CloudTaskSession, summary?: string): SessionRecord {
+  const registry = loadRegistry();
+  const sessionId = cloudSessionId(task.taskId);
+  const existing = registry.sessions[sessionId];
+  const timestamp = nowIso();
+  const session: SessionRecord = {
+    sessionId,
+    kind: 'cloud-task',
+    displayName: cloudDisplayName(task),
+    isCustomName: true,
+    cwd: existing?.cwd ?? process.cwd(),
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    lastSummary: summary ?? cloudSummary(task),
+    lastSummaryState: cloudSummaryState(task.cloudStatus),
+    lastUsage: existing?.lastUsage,
+    status: cloudSessionStatus(task.cloudStatus),
+    cloudTask: task
+  };
+  registry.sessions[sessionId] = session;
+  normalizeRegistry(registry);
+  saveRegistry(registry);
+  return session;
+}
+
+export function upsertCloudTasks(tasks: CloudTaskSession[]): SessionRecord[] {
+  return tasks.map((task) => upsertCloudTask(task));
+}
+
+export function replaceCloudTasks(tasks: CloudTaskSession[]): SessionRecord[] {
+  const registry = loadRegistry();
+  const nextCloudSessionIds = new Set(tasks.map((task) => cloudSessionId(task.taskId)));
+  for (const session of Object.values(registry.sessions)) {
+    if (session.kind === 'cloud-task' && !nextCloudSessionIds.has(session.sessionId)) {
+      delete registry.sessions[session.sessionId];
+    }
+  }
+  saveRegistry(registry);
+  return upsertCloudTasks(tasks);
+}
+
+export function cloudSessionId(taskId: string): string {
+  return `cloud:${taskId}`;
 }
 
 export function removeSessionsByLauncherPid(launcherPid: number): string[] {
@@ -133,6 +183,7 @@ export function removeSessionsByLauncherPid(launcherPid: number): string[] {
 export function pruneStaleSessions(): string[] {
   const registry = loadRegistry();
   const removedSessionIds = Object.values(registry.sessions)
+    .filter((session) => (session.kind ?? 'local-interactive') === 'local-interactive')
     .filter((session) => !session.launcherPid || !processIsRunning(session.launcherPid))
     .map((session) => session.sessionId);
 
@@ -152,10 +203,12 @@ function normalizeRegistry(registry: RegistryFile): void {
   delete (registry as RegistryFile & { nextDefaultName?: number }).nextDefaultName;
 
   for (const session of Object.values(registry.sessions)) {
+    session.kind ??= 'local-interactive';
     session.isCustomName ??= !DEFAULT_NAME_PATTERN.test(session.displayName);
   }
 
   const defaultSessions = Object.values(registry.sessions)
+    .filter((session) => (session.kind ?? 'local-interactive') === 'local-interactive')
     .filter((session) => !session.isCustomName)
     .sort((a, b) => {
       const byCreatedAt = a.createdAt.localeCompare(b.createdAt);
@@ -176,6 +229,48 @@ function normalizeRegistry(registry: RegistryFile): void {
     session.displayName = `codex ${nextNumber}`;
     nextNumber += 1;
   }
+}
+
+function pruneStaleLocalSessions(registry: RegistryFile): void {
+  for (const session of Object.values(registry.sessions)) {
+    if ((session.kind ?? 'local-interactive') !== 'local-interactive') {
+      continue;
+    }
+    if (!session.launcherPid || !processIsRunning(session.launcherPid)) {
+      delete registry.sessions[session.sessionId];
+    }
+  }
+  normalizeRegistry(registry);
+}
+
+function cloudSessionStatus(status: string): SessionRecord['status'] {
+  const normalized = status.toLowerCase();
+  if (['done', 'complete', 'completed', 'success', 'succeeded', 'merged'].includes(normalized)) {
+    return 'done';
+  }
+  if (['error', 'failed', 'failure', 'cancelled', 'canceled'].includes(normalized)) {
+    return 'failed';
+  }
+  return 'active';
+}
+
+function cloudSummaryState(status: string): SummaryState {
+  const normalized = status.toLowerCase();
+  if (['done', 'complete', 'completed', 'success', 'succeeded', 'merged'].includes(normalized)) {
+    return 'done';
+  }
+  if (['error', 'failed', 'failure', 'cancelled', 'canceled'].includes(normalized)) {
+    return 'failed';
+  }
+  return 'ready';
+}
+
+function cloudSummary(task: CloudTaskSession): string {
+  return task.title?.trim() || 'Codex Cloud task.';
+}
+
+function cloudDisplayName(task: CloudTaskSession): string {
+  return task.environmentLabel?.trim() || task.environmentId?.trim() || 'Codex Cloud';
 }
 
 function nextDefaultDisplayName(registry: RegistryFile, sessionId?: string): string {

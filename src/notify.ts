@@ -5,7 +5,7 @@ import path from 'node:path';
 import { loadConfig, overlayControlPath, overlayHelperLogPath, overlaySnapshotPath, overlayStatePath } from './config.js';
 import { canRepromptSession } from './reprompt.js';
 import { listSessions } from './session-registry.js';
-import { SessionRecord, SessionStatus, SessionUsageSnapshot, SummaryState } from './types.js';
+import { SessionKind, SessionRecord, SessionStatus, SessionUsageSnapshot, SummaryState } from './types.js';
 
 interface OverlayCommand {
   executable: string;
@@ -17,7 +17,11 @@ interface OverlayEvent {
   sessionId: string;
   displayName?: string;
   summary?: string;
+  kind?: SessionKind;
+  sourceLabel?: string;
   status?: SessionStatus;
+  cloudStatus?: string;
+  cloudDetail?: string;
   state?: SummaryState;
   usage?: SessionUsageSnapshot;
   timestamp: string;
@@ -71,7 +75,11 @@ function overlayShowEvent(session: SessionRecord, presentation = currentPresenta
     sessionId: session.sessionId,
     displayName: session.displayName,
     summary: message,
+    kind: session.kind ?? 'local-interactive',
+    sourceLabel: session.kind === 'cloud-task' ? 'Cloud' : undefined,
     status: session.status,
+    cloudStatus: session.cloudTask?.cloudStatus,
+    cloudDetail: cloudOverlayDetail(session),
     state: session.lastSummaryState ?? 'ready',
     usage: session.lastUsage,
     timestamp: new Date().toISOString(),
@@ -166,10 +174,32 @@ function currentPresentation(): OverlayPresentation {
 
 function overlaySummary(session: SessionRecord): string {
   const config = loadConfig();
-  const fallback = session.status === 'active'
+  const fallback = session.kind === 'cloud-task'
+    ? cloudOverlaySummary(session)
+    : session.status === 'active'
     ? 'Currently working in the terminal.'
     : 'Ready for your next prompt.';
   return truncate(session.lastSummary ?? fallback, config.overlaySummaryMaxChars);
+}
+
+function cloudOverlaySummary(session: SessionRecord): string {
+  const task = session.cloudTask;
+  return task?.title?.trim() || 'Codex Cloud task.';
+}
+
+function cloudOverlayDetail(session: SessionRecord): string | undefined {
+  const task = session.cloudTask;
+  if (!task) {
+    return undefined;
+  }
+  const pieces: string[] = [];
+  if (task.filesChanged !== undefined) {
+    pieces.push(`${task.filesChanged} files changed`);
+  }
+  if (task.attempts && task.attempts > 1) {
+    pieces.push(`${task.attempts} attempts`);
+  }
+  return pieces.length > 0 ? pieces.join(' · ') : undefined;
 }
 
 function loadOverlaySnapshot(): OverlaySnapshot {

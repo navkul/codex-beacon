@@ -8,6 +8,14 @@ import { runUserPromptSubmitHook } from './hook-user-prompt-submit.js';
 import { installMessage } from './install.js';
 import { launchCodex } from './launch.js';
 import { APP_CONFIG_KEYS, AppConfigKey, configPath, loadConfig, saveConfig } from './config.js';
+import {
+  applyCloudTask,
+  openCloudTask,
+  printCloudTaskList,
+  showCloudTaskDiff,
+  showCloudTaskStatus,
+  syncCloudTasks
+} from './cloud.js';
 import { sendOverlayControl } from './overlay-control.js';
 import { replaceOverlaySnapshot } from './notify.js';
 import { repromptSession } from './reprompt.js';
@@ -108,8 +116,71 @@ program
   .description('List tracked sessions')
   .action(() => {
     for (const session of listSessions()) {
-      process.stdout.write(`${session.displayName}\t${session.status}\t${session.cwd}\n`);
+      const source = session.kind === 'cloud-task' ? 'cloud' : 'local';
+      process.stdout.write(`${session.displayName}\t${source}\t${session.status}\t${session.cwd}\n`);
     }
+  });
+
+const cloudCommand = program
+  .command('cloud')
+  .description('Track and manage Codex Cloud tasks');
+
+cloudCommand
+  .command('list')
+  .description('List Codex Cloud tasks as JSON')
+  .option('--env <envId>', 'filter by Codex Cloud environment id')
+  .option('--limit <n>', 'maximum number of tasks to return')
+  .option('--cursor <cursor>', 'pagination cursor')
+  .action((options: { env?: string; limit?: string; cursor?: string }) => {
+    printCloudTaskList(options);
+  });
+
+cloudCommand
+  .command('sync')
+  .description('Import recent Codex Cloud tasks into the overlay')
+  .option('--env <envId>', 'filter by Codex Cloud environment id')
+  .option('--limit <n>', 'maximum number of tasks to return')
+  .option('--cursor <cursor>', 'pagination cursor')
+  .option('--quiet', 'suppress output')
+  .action((options: { env?: string; limit?: string; cursor?: string; quiet?: boolean }) => {
+    const count = syncCloudTasks(options);
+    if (!options.quiet) {
+      process.stdout.write(`Synced ${count} Codex Cloud task${count === 1 ? '' : 's'}.\n`);
+    }
+  });
+
+cloudCommand
+  .command('status')
+  .description('Show the status of a Codex Cloud task')
+  .argument('<taskId>')
+  .action((taskId: string) => {
+    showCloudTaskStatus(taskId);
+  });
+
+cloudCommand
+  .command('diff')
+  .description('Show the diff for a Codex Cloud task')
+  .argument('<taskId>')
+  .option('--attempt <n>', 'attempt number')
+  .action((taskId: string, options: { attempt?: string }) => {
+    showCloudTaskDiff(taskId, options.attempt);
+  });
+
+cloudCommand
+  .command('apply')
+  .description('Apply the diff for a Codex Cloud task locally')
+  .argument('<taskId>')
+  .option('--attempt <n>', 'attempt number')
+  .action((taskId: string, options: { attempt?: string }) => {
+    applyCloudTask(taskId, options.attempt);
+  });
+
+cloudCommand
+  .command('open')
+  .description('Open a tracked Codex Cloud task in the browser')
+  .argument('<taskId>')
+  .action((taskId: string) => {
+    openCloudTask(taskId);
   });
 
 const configCommand = program

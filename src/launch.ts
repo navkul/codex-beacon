@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { resolveCodexBinary } from './codex-path.js';
+import { syncCloudTasksDetached } from './cloud.js';
 import { sendEvent } from './ipc.js';
 
 const APPLESCRIPT_TIMEOUT_MS = 300;
@@ -34,6 +35,9 @@ export function launchCodex(args: string[], customName?: string): void {
   });
 
   child.on('exit', (code, signal) => {
+    if (isCloudCommand(args)) {
+      syncCloudTasksDetached();
+    }
     void sendEvent({
       type: 'session-exit',
       launcherPid: process.pid,
@@ -51,6 +55,10 @@ export function launchCodex(args: string[], customName?: string): void {
     process.stderr.write(`Failed to launch codex: ${error.message}\n`);
     process.exit(1);
   });
+}
+
+function isCloudCommand(args: string[]): boolean {
+  return args[0] === 'cloud';
 }
 
 function captureTerminalMetadata(terminalApp: string): LaunchTerminalMetadata {

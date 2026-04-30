@@ -28,6 +28,11 @@ export function focusSession(sessionId: string): void {
     throw new Error(`Unknown session: ${sessionId}`);
   }
 
+  if (session.kind === 'cloud-task') {
+    focusCloudTask(session);
+    return;
+  }
+
   const terminal = (session.terminalApp ?? '').toLowerCase();
   if (terminal.includes('iterm')) {
     if (focusITermSession(session)) {
@@ -66,6 +71,14 @@ export function focusSession(sessionId: string): void {
   }
 
   throw new Error(`Unable to locate a live terminal target for session: ${sessionId}`);
+}
+
+function focusCloudTask(session: NonNullable<ReturnType<typeof getSession>>): void {
+  const url = session.cloudTask?.url;
+  if (!url) {
+    throw new Error(`No Codex Cloud URL known for ${session.displayName}`);
+  }
+  execFileSync('open', [url], { stdio: 'ignore' });
 }
 
 function focusITermBySessionUniqueId(sessionUniqueId?: string): boolean {
