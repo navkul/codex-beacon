@@ -460,6 +460,12 @@ final class OverlayStateStore {
         save()
     }
 
+    func moveToTop(sessionId: String) {
+        orderedSessionIds.removeAll { $0 == sessionId }
+        orderedSessionIds.insert(sessionId, at: 0)
+        save()
+    }
+
     func remove(sessionId: String) {
         orderedSessionIds.removeAll { $0 == sessionId }
         save()
@@ -1196,18 +1202,34 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         let nextIds = Set(nextItems.keys)
         let addedIds = nextIds.subtracting(previousIds)
         let removedIds = previousIds.subtracting(nextIds)
+        let completedIds = snapshot.items.compactMap { event -> String? in
+            guard let item = nextItems[event.sessionId],
+                  item.kind != "cloud-task",
+                  item.status == .waiting,
+                  items[item.sessionId]?.status != .waiting else {
+                return nil
+            }
+            return item.sessionId
+        }
         items = nextItems
         for sessionId in removedIds {
             stateStore.remove(sessionId: sessionId)
             repromptStates.removeValue(forKey: sessionId)
         }
+        if shouldRender || showOnLaunch {
+            for sessionId in completedIds.reversed() {
+                stateStore.moveToTop(sessionId: sessionId)
+            }
+        }
         for item in nextItems.values where item.status == .active {
             repromptStates.removeValue(forKey: item.sessionId)
         }
-        logger.log("applySnapshot reason=\(reason) items=\(items.count) added=\(addedIds.count) removed=\(removedIds.count) render=\(shouldRender)")
+        logger.log("applySnapshot reason=\(reason) items=\(items.count) added=\(addedIds.count) removed=\(removedIds.count) completed=\(completedIds.count) render=\(shouldRender)")
         if shouldRender {
             refresh()
-            if !addedIds.isEmpty && addedIds.contains(where: { nextItems[$0]?.status == .waiting || nextItems[$0]?.kind == "cloud-task" }) {
+            if !completedIds.isEmpty {
+                showOverlay(reason: "\(reason)-completed")
+            } else if !addedIds.isEmpty && addedIds.contains(where: { nextItems[$0]?.status == .waiting || nextItems[$0]?.kind == "cloud-task" }) {
                 showOverlay(reason: reason)
             } else if items.isEmpty && !removedIds.isEmpty {
                 hideOverlay(reason: "\(reason)-clear")
