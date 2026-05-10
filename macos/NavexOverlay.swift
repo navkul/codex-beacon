@@ -1913,9 +1913,16 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
         for index in 0..<request.count {
             let profilePart = request.profile.map { " with profile \(appleScriptString($0))" } ?? " with default profile"
-            lines.append("set w\(index) to (create window\(profilePart) command \(appleScriptString(launchCommand)))")
+            lines.append("create window\(profilePart)")
+            lines.append("delay 0.15")
+            lines.append("tell current session of current window to write text \(appleScriptString(launchCommand))")
             if index < frames.count {
-                lines.append("set bounds of w\(index) to {\(frames[index].left), \(frames[index].top), \(frames[index].right), \(frames[index].bottom)}")
+                lines.append("tell application \"System Events\"")
+                lines.append("tell process \"iTerm2\"")
+                lines.append("set position of front window to {\(frames[index].left), \(frames[index].top)}")
+                lines.append("set size of front window to {\(frames[index].width), \(frames[index].height)}")
+                lines.append("end tell")
+                lines.append("end tell")
             }
         }
 
@@ -1941,8 +1948,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private struct AppleScriptFrame {
         let left: Int
         let top: Int
-        let right: Int
-        let bottom: Int
+        let width: Int
+        let height: Int
     }
 
     private func tiledFrames(count: Int) -> [AppleScriptFrame] {
@@ -1970,8 +1977,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             return AppleScriptFrame(
                 left: Int(rect.minX.rounded()),
                 top: top,
-                right: Int(rect.maxX.rounded()),
-                bottom: bottom
+                width: Int(rect.width.rounded()),
+                height: bottom - top
             )
         }
     }
