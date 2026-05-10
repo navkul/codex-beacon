@@ -126,16 +126,7 @@ export function ensureOverlayHelper(showOnLaunch: boolean): ChildProcess | undef
   const child = spawn(command, [], {
     detached: true,
     stdio: ['ignore', 'ignore', 'ignore'],
-    env: {
-      ...process.env,
-      NAVEX_OVERLAY_CONTROL_PATH: overlayControlPath(),
-      NAVEX_OVERLAY_STATE_PATH: overlayStatePath(),
-      NAVEX_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
-      NAVEX_OVERLAY_LOG_PATH: overlayHelperLogPath(),
-      NAVEX_CLI_PATH: fileURLToPath(new URL('./cli.js', import.meta.url)),
-      NAVEX_NODE_PATH: process.execPath,
-      NAVEX_OVERLAY_SHOW_ON_LAUNCH: showOnLaunch ? '1' : '0'
-    }
+    env: overlayHelperEnv(showOnLaunch)
   });
   child.on('exit', () => {
     overlayProcess = undefined;
@@ -146,6 +137,39 @@ export function ensureOverlayHelper(showOnLaunch: boolean): ChildProcess | undef
   child.unref();
   overlayProcess = child;
   return child;
+}
+
+export function runOverlayHelperForeground(showOnLaunch: boolean): void {
+  replaceOverlaySnapshot(listSessions());
+  const command = overlayCommand();
+  const child = spawn(command, [], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+    env: overlayHelperEnv(showOnLaunch)
+  });
+  child.on('exit', (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+  child.on('error', (error) => {
+    process.stderr.write(`Failed to launch overlay helper: ${error.message}\n`);
+    process.exit(1);
+  });
+}
+
+export function overlayHelperEnv(showOnLaunch: boolean): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    NAVEX_OVERLAY_CONTROL_PATH: overlayControlPath(),
+    NAVEX_OVERLAY_STATE_PATH: overlayStatePath(),
+    NAVEX_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
+    NAVEX_OVERLAY_LOG_PATH: overlayHelperLogPath(),
+    NAVEX_CLI_PATH: fileURLToPath(new URL('./cli.js', import.meta.url)),
+    NAVEX_NODE_PATH: process.execPath,
+    NAVEX_OVERLAY_SHOW_ON_LAUNCH: showOnLaunch ? '1' : '0'
+  };
 }
 
 function updateOverlaySnapshot(event: OverlayEvent): void {

@@ -13,7 +13,7 @@ const LEGACY_APP_ROOT = path.join(homedir(), '.codex-beacon');
 const DEFAULT_CONFIG: AppConfig = {
   appDisplayName: 'Navex',
   overlayCommand: null,
-  overlayHotkey: 'cmd+option+k',
+  overlayHotkey: 'cmd+shift+k',
   overlayWidth: 384,
   overlayMaxVisibleRows: 4,
   overlayShowSummary: true,

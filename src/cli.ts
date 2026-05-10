@@ -17,7 +17,8 @@ import {
   syncCloudTasks
 } from './cloud.js';
 import { sendOverlayControl } from './overlay-control.js';
-import { replaceOverlaySnapshot } from './notify.js';
+import { replaceOverlaySnapshot, runOverlayHelperForeground } from './notify.js';
+import { installOverlayLoginItem, uninstallOverlayLoginItem } from './overlay-login.js';
 import { repromptSession } from './reprompt.js';
 import { listSessions, removeSession } from './session-registry.js';
 
@@ -74,7 +75,7 @@ const overlayCommand = program
 
 overlayCommand
   .command('show')
-  .description('Show the overlay if there are live sessions')
+  .description('Show the overlay')
   .action(() => {
     sendOverlayControl('show');
   });
@@ -91,6 +92,30 @@ overlayCommand
   .description('Toggle overlay visibility')
   .action(() => {
     sendOverlayControl('toggle');
+  });
+
+overlayCommand
+  .command('helper')
+  .description('Run the native overlay helper in the foreground')
+  .option('--show', 'show the overlay after launch')
+  .action((options: { show?: boolean }) => {
+    runOverlayHelperForeground(options.show === true);
+  });
+
+overlayCommand
+  .command('install-login')
+  .description('Start the overlay helper automatically at macOS login')
+  .action(() => {
+    const plist = installOverlayLoginItem();
+    process.stdout.write(`Installed ${plist}\n`);
+  });
+
+overlayCommand
+  .command('uninstall-login')
+  .description('Remove the macOS login item for the overlay helper')
+  .action(() => {
+    const plist = uninstallOverlayLoginItem();
+    process.stdout.write(`Removed ${plist}\n`);
   });
 
 program

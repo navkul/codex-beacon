@@ -985,7 +985,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
             self.logger.log("deferredSnapshotReload")
             self.loadSnapshotIfNeeded(reason: "deferred", allowSameRaw: true)
-            if self.showOnLaunch, !self.items.isEmpty {
+            if self.showOnLaunch {
                 self.showOverlay(reason: "deferred-launch")
             }
         }
@@ -1320,12 +1320,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         updateHeaderUsage()
         updateCommandField()
 
-        guard !items.isEmpty else {
-            logger.log("refresh items=0 window=orderOut")
-            overlayWindow?.orderOut(nil)
-            return
-        }
-
         for subview in rowsContainer.subviews {
             subview.removeFromSuperview()
         }
@@ -1400,7 +1394,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     private func statusItemTitle() -> String {
         let base = currentAppDisplayName()
-        return items.isEmpty ? base : "\(base) \(items.count)"
+        return "\(base) \(items.count)"
     }
 
     private func currentAppDisplayName() -> String {
@@ -1419,7 +1413,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     private func headerSubtitleText() -> String {
         guard !items.isEmpty else {
-            return "No live sessions"
+            return "0 waiting"
         }
 
         let cloudCount = items.values.filter { $0.kind == "cloud-task" }.count
@@ -1738,9 +1732,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     private func showOverlay(reason: String) {
-        guard !items.isEmpty else {
-            return
-        }
         guard let window = overlayWindow else {
             logger.log("showOverlay reason=\(reason) missingWindow=true")
             return
