@@ -8,8 +8,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    ".codex/hooks.json"
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js && node scripts/build-overlay.mjs",

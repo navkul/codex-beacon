@@ -25,11 +25,16 @@ export function installMessage(shell: 'zsh' | 'bash'): string {
     '',
     'Also ensure ~/.codex/config.toml has:',
     '[features]',
-    'codex_hooks = true',
+    'hooks = true',
     '',
     'Then write the following to ~/.codex/hooks.json:',
     '',
-    renderHooksJson()
+    renderHooksJson(),
+    '',
+    'Codex 0.130+ requires hook trust review after this file changes:',
+    '- Start a new codex session',
+    '- Run /hooks',
+    '- Trust the Navex SessionStart, UserPromptSubmit, and Stop hooks'
   ].join('\n');
 }
 
