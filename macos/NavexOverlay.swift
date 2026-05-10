@@ -112,6 +112,14 @@ struct OverlayControlCommand: Decodable {
 
 struct OverlayStateFile: Codable {
     var orderedSessionIds: [String]
+    var workingDirectory: String?
+}
+
+enum OverlayCommandStatus {
+    case idle
+    case working(String)
+    case success(String)
+    case failure(String)
 }
 
 final class OverlayLogger {
@@ -442,10 +450,13 @@ private let hotkeyEventCallback: EventHandlerUPP = { _, eventRef, userData in
 final class OverlayStateStore {
     private let url: URL
     private var orderedSessionIds: [String]
+    private var workingDirectory: String?
 
     init(url: URL) {
         self.url = url
-        self.orderedSessionIds = Self.load(url: url).orderedSessionIds
+        let loaded = Self.load(url: url)
+        self.orderedSessionIds = loaded.orderedSessionIds
+        self.workingDirectory = loaded.workingDirectory
     }
 
     func orderedIds() -> [String] {
@@ -476,10 +487,19 @@ final class OverlayStateStore {
         save()
     }
 
+    func commandWorkingDirectory() -> String? {
+        workingDirectory
+    }
+
+    func setCommandWorkingDirectory(_ path: String) {
+        workingDirectory = path
+        save()
+    }
+
     private func save() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let file = OverlayStateFile(orderedSessionIds: orderedSessionIds)
+        let file = OverlayStateFile(orderedSessionIds: orderedSessionIds, workingDirectory: workingDirectory)
         if let data = try? encoder.encode(file) {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: url, options: .atomic)
@@ -491,7 +511,7 @@ final class OverlayStateStore {
             let data = try? Data(contentsOf: url),
             let state = try? JSONDecoder().decode(OverlayStateFile.self, from: data)
         else {
-            return OverlayStateFile(orderedSessionIds: [])
+            return OverlayStateFile(orderedSessionIds: [], workingDirectory: nil)
         }
         return state
     }
@@ -889,6 +909,7 @@ final class OverlayRowView: NSView {
 final class OverlayApp: NSObject, NSApplicationDelegate {
     private enum LayoutMetrics {
         static let headerHeight: CGFloat = 66
+        static let commandHeight: CGFloat = 34
         static let footerHeight: CGFloat = 16
         static let rowSpacing: CGFloat = 10
     }
@@ -905,6 +926,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let headerSubtitle = NSTextField(labelWithString: "No live sessions")
     private let headerUsagePrimary = NSTextField(labelWithString: "")
     private let headerUsageSecondary = NSTextField(labelWithString: "")
+    private let commandContainer = NSView()
+    private let commandField = NSTextField()
+    private let commandUnderline = NSView()
     private let scrollView = NSScrollView()
     private let rowsContainer = FlippedView(frame: .zero)
     private let stateStore = OverlayStateStore(url: OverlayApp.overlayStateURL())
@@ -920,6 +944,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private var visibleRowsContentHeight: CGFloat = 1
     private var lastHandledControlId = ""
     private var repromptStates: [String: RepromptDisplayState] = [:]
+    private var commandStatus: OverlayCommandStatus = .idle
     private lazy var hotkeyController = HotkeyController(target: self, logger: logger)
 
     override init() {
@@ -1060,6 +1085,23 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerUsageSecondary.isSelectable = false
         headerUsageSecondary.lineBreakMode = .byTruncatingHead
 
+        commandContainer.wantsLayer = false
+        commandContainer.toolTip = "Navex command"
+
+        commandField.isBordered = false
+        commandField.isBezeled = false
+        commandField.drawsBackground = false
+        commandField.focusRingType = .none
+        commandField.font = overlayFont(size: 12, weight: .medium)
+        commandField.textColor = NSColor.labelColor.withAlphaComponent(0.94)
+        commandField.placeholderString = commandPlaceholder()
+        commandField.target = self
+        commandField.action = #selector(submitOverlayCommand(_:))
+
+        commandUnderline.wantsLayer = true
+        commandUnderline.layer?.cornerRadius = 0.5
+        commandUnderline.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
+
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
@@ -1075,6 +1117,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         backgroundView.addSubview(headerSubtitle)
         backgroundView.addSubview(headerUsagePrimary)
         backgroundView.addSubview(headerUsageSecondary)
+        commandContainer.addSubview(commandField)
+        commandContainer.addSubview(commandUnderline)
+        backgroundView.addSubview(commandContainer)
         backgroundView.addSubview(scrollView)
 
         rootView.subviews.forEach { $0.removeFromSuperview() }
@@ -1243,6 +1288,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         updateStatusItem()
         headerSubtitle.stringValue = headerSubtitleText()
         updateHeaderUsage()
+        updateCommandField()
 
         guard !items.isEmpty else {
             logger.log("refresh items=0 window=orderOut")
@@ -1369,7 +1415,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func layoutPanel() {
-        let height = LayoutMetrics.headerHeight + max(visibleRowsContentHeight, 1) + LayoutMetrics.footerHeight
+        let height = LayoutMetrics.headerHeight + LayoutMetrics.commandHeight + max(visibleRowsContentHeight, 1) + LayoutMetrics.footerHeight
         let width = CGFloat(presentation.width)
         let usageWidth: CGFloat = 214
         let leftWidth = max(132, width - usageWidth - 54)
@@ -1379,7 +1425,10 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerSubtitle.frame = NSRect(x: 20, y: 33, width: leftWidth, height: 14)
         headerUsagePrimary.frame = NSRect(x: width - usageWidth - 20, y: 14, width: usageWidth, height: 14)
         headerUsageSecondary.frame = NSRect(x: width - usageWidth - 20, y: 31, width: usageWidth, height: 14)
-        scrollView.frame = NSRect(x: 16, y: 66, width: width - 28, height: height - 82)
+        commandContainer.frame = NSRect(x: 20, y: 59, width: width - 40, height: 28)
+        commandField.frame = NSRect(x: 0, y: 0, width: commandContainer.bounds.width, height: 19)
+        commandUnderline.frame = NSRect(x: 0, y: 24, width: commandContainer.bounds.width, height: 1)
+        scrollView.frame = NSRect(x: 16, y: 100, width: width - 28, height: height - 116)
         guard let window = overlayWindow else {
             logger.log("layoutPanel missingWindow=true")
             return
@@ -1474,6 +1523,36 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         return dateFormatter.string(from: resetDate)
     }
 
+    private func updateCommandField() {
+        commandField.placeholderString = commandPlaceholder()
+        switch commandStatus {
+        case .idle:
+            commandField.textColor = NSColor.labelColor.withAlphaComponent(0.94)
+            commandUnderline.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        case .working:
+            commandField.textColor = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.96)
+            commandUnderline.layer?.backgroundColor = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.32).cgColor
+        case .success:
+            commandField.textColor = NSColor(calibratedRed: 0.45, green: 0.83, blue: 0.63, alpha: 0.96)
+            commandUnderline.layer?.backgroundColor = NSColor(calibratedRed: 0.45, green: 0.83, blue: 0.63, alpha: 0.3).cgColor
+        case .failure:
+            commandField.textColor = NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.96)
+            commandUnderline.layer?.backgroundColor = NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.3).cgColor
+        }
+    }
+
+    private func commandPlaceholder() -> String {
+        switch commandStatus {
+        case .idle:
+            if let workingDirectory = stateStore.commandWorkingDirectory() {
+                return "Command...  /init --project \(URL(fileURLWithPath: workingDirectory).lastPathComponent)"
+            }
+            return "Command...  /working-dir Developer"
+        case .working(let message), .success(let message), .failure(let message):
+            return message
+        }
+    }
+
     private func currentScreenVisibleFrame() -> NSRect? {
         let mouseLocation = NSEvent.mouseLocation
         if let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) {
@@ -1556,6 +1635,356 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         }
         launch(item.focusCommand)
         overlayWindow?.orderOut(nil)
+    }
+
+    @objc private func submitOverlayCommand(_ sender: NSTextField) {
+        let text = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            return
+        }
+        sender.stringValue = ""
+        handleOverlayCommand(text)
+    }
+
+    private func handleOverlayCommand(_ text: String) {
+        let tokens = tokenizeCommand(text)
+        guard let command = tokens.first else {
+            return
+        }
+
+        switch command {
+        case "/working-dir":
+            handleWorkingDirectoryCommand(tokens: Array(tokens.dropFirst()))
+        case "/init":
+            handleInitCommand(tokens: Array(tokens.dropFirst()))
+        default:
+            setCommandStatus(.failure("Unknown command: \(command)"))
+            NSSound.beep()
+        }
+    }
+
+    private func handleWorkingDirectoryCommand(tokens: [String]) {
+        guard tokens.count == 1 else {
+            setCommandStatus(.failure("Usage: /working-dir <path>"))
+            NSSound.beep()
+            return
+        }
+
+        let path = resolveUserPath(tokens[0], relativeTo: FileManager.default.homeDirectoryForCurrentUser.path)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            setCommandStatus(.failure("Directory not found: \(displayPath(path))"))
+            NSSound.beep()
+            return
+        }
+
+        stateStore.setCommandWorkingDirectory(path)
+        setCommandStatus(.success("Working dir: \(displayPath(path))"))
+    }
+
+    private func handleInitCommand(tokens: [String]) {
+        let parsed = parseInitArguments(tokens)
+        switch parsed {
+        case .failure(let message):
+            setCommandStatus(.failure(message))
+            NSSound.beep()
+        case .success(let request):
+            launchInitRequest(request)
+        }
+    }
+
+    private func launchInitRequest(_ request: InitCommandRequest) {
+        let projectPath = request.projectPath
+        let projectName = URL(fileURLWithPath: projectPath).lastPathComponent
+        setCommandStatus(.working("Launching \(request.count) \(projectName) session\(request.count == 1 ? "" : "s")..."))
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = self?.runInitCommand(request) ?? .failure("Navex helper unavailable")
+            DispatchQueue.main.async {
+                guard let self else {
+                    return
+                }
+                switch result {
+                case .success(let message):
+                    self.setCommandStatus(.success(message))
+                case .failure(let message):
+                    self.setCommandStatus(.failure(message))
+                    NSSound.beep()
+                }
+            }
+        }
+    }
+
+    private func setCommandStatus(_ status: OverlayCommandStatus) {
+        commandStatus = status
+        updateCommandField()
+        layoutPanel()
+    }
+
+    private struct InitCommandRequest {
+        let projectPath: String
+        let count: Int
+        let profile: String?
+    }
+
+    private enum CommandParseResult<T> {
+        case success(T)
+        case failure(String)
+    }
+
+    private func parseInitArguments(_ tokens: [String]) -> CommandParseResult<InitCommandRequest> {
+        var project: String?
+        var explicitPath: String?
+        var count = 1
+        var profile: String?
+        var index = 0
+
+        while index < tokens.count {
+            let token = tokens[index]
+            switch token {
+            case "--project":
+                guard index + 1 < tokens.count else {
+                    return .failure("Missing value for --project")
+                }
+                project = tokens[index + 1]
+                index += 2
+            case "--path":
+                guard index + 1 < tokens.count else {
+                    return .failure("Missing value for --path")
+                }
+                explicitPath = tokens[index + 1]
+                index += 2
+            case "-n", "--count":
+                guard index + 1 < tokens.count, let parsed = Int(tokens[index + 1]), (1...9).contains(parsed) else {
+                    return .failure("Expected -n between 1 and 9")
+                }
+                count = parsed
+                index += 2
+            case "--profile":
+                guard index + 1 < tokens.count else {
+                    return .failure("Missing value for --profile")
+                }
+                profile = tokens[index + 1]
+                index += 2
+            default:
+                return .failure("Unsupported /init option: \(token)")
+            }
+        }
+
+        let projectPath: String
+        if let explicitPath {
+            projectPath = resolveUserPath(explicitPath, relativeTo: stateStore.commandWorkingDirectory() ?? FileManager.default.homeDirectoryForCurrentUser.path)
+        } else if let project {
+            guard let base = stateStore.commandWorkingDirectory() else {
+                return .failure("Set /working-dir first")
+            }
+            projectPath = resolveProject(project, base: base)
+        } else {
+            return .failure("Usage: /init --project <name>")
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: projectPath, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return .failure("Project not found: \(displayPath(projectPath))")
+        }
+
+        return .success(InitCommandRequest(projectPath: projectPath, count: count, profile: profile))
+    }
+
+    private func resolveProject(_ project: String, base: String) -> String {
+        if project.contains("/") || project.hasPrefix("~") {
+            return resolveUserPath(project, relativeTo: base)
+        }
+        return URL(fileURLWithPath: base).appendingPathComponent(project).standardizedFileURL.path
+    }
+
+    private func resolveUserPath(_ raw: String, relativeTo base: String) -> String {
+        let expanded: String
+        if raw == "~" {
+            expanded = FileManager.default.homeDirectoryForCurrentUser.path
+        } else if raw.hasPrefix("~/") {
+            expanded = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(String(raw.dropFirst(2))).path
+        } else if raw.hasPrefix("/") {
+            expanded = raw
+        } else {
+            expanded = URL(fileURLWithPath: base).appendingPathComponent(raw).path
+        }
+        return URL(fileURLWithPath: expanded).standardizedFileURL.path
+    }
+
+    private func displayPath(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home {
+            return "~"
+        }
+        if path.hasPrefix(home + "/") {
+            return "~/" + String(path.dropFirst(home.count + 1))
+        }
+        return path
+    }
+
+    private func tokenizeCommand(_ text: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var quote: Character?
+        var escaping = false
+
+        for character in text {
+            if escaping {
+                current.append(character)
+                escaping = false
+                continue
+            }
+
+            if character == "\\" {
+                escaping = true
+                continue
+            }
+
+            if let activeQuote = quote {
+                if character == activeQuote {
+                    quote = nil
+                } else {
+                    current.append(character)
+                }
+                continue
+            }
+
+            if character == "\"" || character == "'" {
+                quote = character
+                continue
+            }
+
+            if character.isWhitespace {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+                continue
+            }
+
+            current.append(character)
+        }
+
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+        return tokens
+    }
+
+    private func runInitCommand(_ request: InitCommandRequest) -> CommandParseResult<String> {
+        guard let script = initAppleScript(request) else {
+            return .failure("Cannot locate navex CLI")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        let pipe = Pipe()
+        process.standardError = pipe
+
+        do {
+            logger.log("initCommand project=\(request.projectPath) count=\(request.count) profile=\(request.profile ?? "")")
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                let name = URL(fileURLWithPath: request.projectPath).lastPathComponent
+                return .success("Launched \(request.count) \(name) session\(request.count == 1 ? "" : "s")")
+            }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return .failure(message?.isEmpty == false ? message! : "iTerm launch failed")
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private func initAppleScript(_ request: InitCommandRequest) -> String? {
+        guard let launchCommand = navexLaunchShellCommand(projectPath: request.projectPath) else {
+            return nil
+        }
+
+        let frames = tiledFrames(count: request.count)
+        var lines: [String] = [
+            "tell application \"iTerm2\"",
+            "activate"
+        ]
+
+        for index in 0..<request.count {
+            let profilePart = request.profile.map { " with profile \(appleScriptString($0))" } ?? " with default profile"
+            lines.append("set w\(index) to (create window\(profilePart) command \(appleScriptString(launchCommand)))")
+            if index < frames.count {
+                lines.append("set bounds of w\(index) to {\(frames[index].left), \(frames[index].top), \(frames[index].right), \(frames[index].bottom)}")
+            }
+        }
+
+        lines.append("end tell")
+        return lines.joined(separator: "\n")
+    }
+
+    private func navexLaunchShellCommand(projectPath: String) -> String? {
+        let command: String
+        if let node = envValue("NAVEX_NODE_PATH"), let cli = envValue("NAVEX_CLI_PATH") {
+            command = "\(shellQuote(node)) \(shellQuote(cli)) launch"
+        } else if let sampleCommand = items.values.first?.focusCommand,
+                  let cliPath = sampleCommand.args.first {
+            command = "\(shellQuote(sampleCommand.executable)) \(shellQuote(cliPath)) launch"
+        } else if let navex = envValue("NAVEX_BIN") {
+            command = "\(shellQuote(navex)) launch"
+        } else {
+            command = "navex launch"
+        }
+        return "cd \(shellQuote(projectPath)) && \(command)"
+    }
+
+    private struct AppleScriptFrame {
+        let left: Int
+        let top: Int
+        let right: Int
+        let bottom: Int
+    }
+
+    private func tiledFrames(count: Int) -> [AppleScriptFrame] {
+        guard let frame = currentScreenVisibleFrame() else {
+            return []
+        }
+
+        let columns = count <= 1 ? 1 : count <= 2 ? count : count <= 4 ? 2 : 3
+        let rows = Int(ceil(Double(count) / Double(columns)))
+        let cellWidth = frame.width / CGFloat(columns)
+        let cellHeight = frame.height / CGFloat(rows)
+        let screenHeight = NSScreen.main?.frame.height ?? frame.maxY
+
+        return (0..<count).map { index in
+            let row = index / columns
+            let column = index % columns
+            let rect = NSRect(
+                x: frame.minX + CGFloat(column) * cellWidth,
+                y: frame.maxY - CGFloat(row + 1) * cellHeight,
+                width: cellWidth,
+                height: cellHeight
+            ).insetBy(dx: 3, dy: 3)
+            let top = Int((screenHeight - rect.maxY).rounded())
+            let bottom = Int((screenHeight - rect.minY).rounded())
+            return AppleScriptFrame(
+                left: Int(rect.minX.rounded()),
+                top: top,
+                right: Int(rect.maxX.rounded()),
+                bottom: bottom
+            )
+        }
+    }
+
+    private func appleScriptString(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private func repromptSession(sessionId: String, text: String) {

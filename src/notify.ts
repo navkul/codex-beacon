@@ -130,6 +130,8 @@ export function ensureOverlayHelper(showOnLaunch: boolean): ChildProcess | undef
       NAVEX_OVERLAY_STATE_PATH: overlayStatePath(),
       NAVEX_OVERLAY_SNAPSHOT_PATH: overlaySnapshotPath(),
       NAVEX_OVERLAY_LOG_PATH: overlayHelperLogPath(),
+      NAVEX_CLI_PATH: fileURLToPath(new URL('./cli.js', import.meta.url)),
+      NAVEX_NODE_PATH: process.execPath,
       NAVEX_OVERLAY_SHOW_ON_LAUNCH: showOnLaunch ? '1' : '0'
     }
   });
