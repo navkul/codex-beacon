@@ -19,7 +19,7 @@ import {
 import { sendOverlayControl } from './overlay-control.js';
 import { replaceOverlaySnapshot } from './notify.js';
 import { repromptSession } from './reprompt.js';
-import { listSessions } from './session-registry.js';
+import { listSessions, removeSession } from './session-registry.js';
 
 const program = new Command();
 program.name('navex');
@@ -111,14 +111,29 @@ program
     process.stdout.write(`${installMessage(parseShell(options.shell))}\n`);
   });
 
-program
+const sessionsCommand = program
   .command('sessions')
-  .description('List tracked sessions')
+  .description('List or manage tracked sessions');
+
+sessionsCommand
   .action(() => {
     for (const session of listSessions()) {
       const source = session.kind === 'cloud-task' ? 'cloud' : 'local';
       process.stdout.write(`${session.displayName}\t${source}\t${session.status}\t${session.cwd}\n`);
     }
+  });
+
+sessionsCommand
+  .command('remove')
+  .description('Remove one tracked session')
+  .argument('<sessionId>')
+  .action((sessionId: string) => {
+    const removed = removeSession(sessionId);
+    replaceOverlaySnapshot(listSessions());
+    if (!removed) {
+      throw new Error(`Unknown session: ${sessionId}`);
+    }
+    process.stdout.write(`Removed ${sessionId}\n`);
   });
 
 const cloudCommand = program

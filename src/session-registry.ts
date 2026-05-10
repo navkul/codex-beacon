@@ -110,6 +110,18 @@ export function getSession(sessionId: string): SessionRecord | undefined {
   return loadRegistry().sessions[sessionId];
 }
 
+export function removeSession(sessionId: string): boolean {
+  const registry = loadRegistry();
+  if (!registry.sessions[sessionId]) {
+    return false;
+  }
+
+  delete registry.sessions[sessionId];
+  normalizeRegistry(registry);
+  saveRegistry(registry);
+  return true;
+}
+
 export function listSessions(): SessionRecord[] {
   const registry = loadRegistry();
   pruneStaleLocalSessions(registry);
@@ -240,7 +252,65 @@ function pruneStaleLocalSessions(registry: RegistryFile): void {
       delete registry.sessions[session.sessionId];
     }
   }
+  pruneDuplicateLocalSessions(registry);
   normalizeRegistry(registry);
+}
+
+function pruneDuplicateLocalSessions(registry: RegistryFile): void {
+  const duplicateGroups = new Map<string, SessionRecord[]>();
+
+  for (const session of Object.values(registry.sessions)) {
+    if ((session.kind ?? 'local-interactive') !== 'local-interactive') {
+      continue;
+    }
+
+    const keys = duplicateIdentityKeys(session);
+    for (const key of keys) {
+      const group = duplicateGroups.get(key) ?? [];
+      group.push(session);
+      duplicateGroups.set(key, group);
+    }
+  }
+
+  const removeIds = new Set<string>();
+  for (const group of duplicateGroups.values()) {
+    const unique = [...new Map(group.map((session) => [session.sessionId, session])).values()];
+    if (unique.length < 2) {
+      continue;
+    }
+    const keep = unique.sort(compareLocalSessionFreshness)[0];
+    for (const session of unique) {
+      if (session.sessionId !== keep.sessionId) {
+        removeIds.add(session.sessionId);
+      }
+    }
+  }
+
+  for (const sessionId of removeIds) {
+    delete registry.sessions[sessionId];
+  }
+}
+
+function duplicateIdentityKeys(session: SessionRecord): string[] {
+  const keys: string[] = [];
+  if (session.terminalSessionUniqueId) {
+    keys.push(`iterm-session:${session.terminalSessionUniqueId}`);
+  }
+  if (session.terminalTty) {
+    keys.push(`tty:${session.terminalTty}`);
+  }
+  if (session.launcherPid) {
+    keys.push(`pid:${session.launcherPid}`);
+  }
+  return keys;
+}
+
+function compareLocalSessionFreshness(a: SessionRecord, b: SessionRecord): number {
+  if (a.status !== b.status) {
+    return a.status === 'active' ? -1 : 1;
+  }
+  const updated = b.updatedAt.localeCompare(a.updatedAt);
+  return updated === 0 ? b.createdAt.localeCompare(a.createdAt) : updated;
 }
 
 function cloudSessionStatus(status: string): SessionRecord['status'] {

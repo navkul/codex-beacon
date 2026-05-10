@@ -27,6 +27,7 @@ interface OverlayEvent {
   timestamp: string;
   focusCommand?: OverlayCommand;
   repromptCommand?: OverlayCommand;
+  removeCommand?: OverlayCommand;
   presentation?: OverlayPresentation;
 }
 
@@ -85,6 +86,7 @@ function overlayShowEvent(session: SessionRecord, presentation = currentPresenta
     timestamp: new Date().toISOString(),
     focusCommand: focusCommand(session.sessionId),
     repromptCommand: session.status === 'waiting' && canRepromptSession(session) ? repromptCommand(session.sessionId) : undefined,
+    removeCommand: removeCommand(session.sessionId),
     presentation
   };
 }
@@ -261,5 +263,13 @@ function repromptCommand(sessionId: string): OverlayCommand {
   return {
     executable: process.execPath,
     args: [cliPath, 'reprompt', '--session-id', sessionId, '--message']
+  };
+}
+
+function removeCommand(sessionId: string): OverlayCommand {
+  const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
+  return {
+    executable: process.execPath,
+    args: [cliPath, 'sessions', 'remove', sessionId]
   };
 }

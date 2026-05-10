@@ -62,6 +62,7 @@ struct OverlayEvent: Decodable {
     let timestamp: String?
     let focusCommand: CommandSpec?
     let repromptCommand: CommandSpec?
+    let removeCommand: CommandSpec?
     let presentation: OverlayPresentation?
 }
 
@@ -79,6 +80,7 @@ struct OverlayItem {
     let timestamp: String
     let focusCommand: CommandSpec
     let repromptCommand: CommandSpec?
+    let removeCommand: CommandSpec?
 }
 
 enum RepromptDisplayState {
@@ -538,6 +540,7 @@ final class OverlayRowView: NSView {
     private let status: SessionStatus
     private let kind: String
     private let openAction: (String) -> Void
+    private let removeAction: (String) -> Void
     private let repromptAction: (String, String) -> Void
     private let moveAction: (String, NSPoint) -> Void
     private let actionButtonsStack = NSStackView()
@@ -552,6 +555,7 @@ final class OverlayRowView: NSView {
         presentation: OverlayPresentation,
         repromptState: RepromptDisplayState?,
         openAction: @escaping (String) -> Void,
+        removeAction: @escaping (String) -> Void,
         repromptAction: @escaping (String, String) -> Void,
         moveAction: @escaping (String, NSPoint) -> Void
     ) {
@@ -559,6 +563,7 @@ final class OverlayRowView: NSView {
         self.status = item.status
         self.kind = item.kind
         self.openAction = openAction
+        self.removeAction = removeAction
         self.repromptAction = repromptAction
         self.moveAction = moveAction
         super.init(frame: .zero)
@@ -599,6 +604,13 @@ final class OverlayRowView: NSView {
             sessionId: item.sessionId,
             tintColor: actionTint
         )
+        let removeButton = subtleIconButton(
+            systemName: "xmark",
+            description: "Remove session",
+            action: #selector(removeRow(_:)),
+            sessionId: item.sessionId,
+            tintColor: NSColor.tertiaryLabelColor.withAlphaComponent(0.72)
+        )
 
         actionButtonsStack.orientation = .vertical
         actionButtonsStack.alignment = .centerX
@@ -607,6 +619,7 @@ final class OverlayRowView: NSView {
         actionButtonsStack.setContentCompressionResistancePriority(.required, for: .vertical)
         actionButtonsStack.setContentHuggingPriority(.required, for: .vertical)
         actionButtonsStack.addArrangedSubview(openButton)
+        actionButtonsStack.addArrangedSubview(removeButton)
 
         let titleRow = NSStackView()
         titleRow.orientation = .horizontal
@@ -775,6 +788,10 @@ final class OverlayRowView: NSView {
         openAction(sessionId)
     }
 
+    @objc private func removeRow(_ sender: NSButton) {
+        removeAction(sessionId)
+    }
+
     @objc private func submitReprompt(_ sender: NSTextField) {
         let text = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
@@ -906,7 +923,7 @@ final class OverlayRowView: NSView {
     }
 }
 
-final class OverlayApp: NSObject, NSApplicationDelegate {
+final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private enum LayoutMetrics {
         static let headerHeight: CGFloat = 66
         static let commandHeight: CGFloat = 34
@@ -928,6 +945,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let headerUsageSecondary = NSTextField(labelWithString: "")
     private let commandContainer = NSView()
     private let commandField = NSTextField()
+    private let commandGhostLabel = NSTextField(labelWithString: "")
     private let commandUnderline = NSView()
     private let scrollView = NSScrollView()
     private let rowsContainer = FlippedView(frame: .zero)
@@ -1095,8 +1113,18 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         commandField.font = overlayFont(size: 12, weight: .medium)
         commandField.textColor = NSColor.labelColor.withAlphaComponent(0.94)
         commandField.placeholderString = commandPlaceholder()
+        commandField.delegate = self
         commandField.target = self
         commandField.action = #selector(submitOverlayCommand(_:))
+
+        commandGhostLabel.font = overlayFont(size: 12, weight: .medium)
+        commandGhostLabel.textColor = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.38)
+        commandGhostLabel.isBezeled = false
+        commandGhostLabel.isBordered = false
+        commandGhostLabel.drawsBackground = false
+        commandGhostLabel.isEditable = false
+        commandGhostLabel.isSelectable = false
+        commandGhostLabel.lineBreakMode = .byClipping
 
         commandUnderline.wantsLayer = true
         commandUnderline.layer?.cornerRadius = 0.5
@@ -1117,6 +1145,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         backgroundView.addSubview(headerSubtitle)
         backgroundView.addSubview(headerUsagePrimary)
         backgroundView.addSubview(headerUsageSecondary)
+        commandContainer.addSubview(commandGhostLabel)
         commandContainer.addSubview(commandField)
         commandContainer.addSubview(commandUnderline)
         backgroundView.addSubview(commandContainer)
@@ -1240,7 +1269,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 usage: event.usage,
                 timestamp: event.timestamp ?? "",
                 focusCommand: focusCommand,
-                repromptCommand: event.repromptCommand
+                repromptCommand: event.repromptCommand,
+                removeCommand: event.removeCommand
             )
         }
 
@@ -1311,6 +1341,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 repromptState: repromptStates[item.sessionId],
                 openAction: { [weak self] sessionId in
                     self?.openSession(sessionId: sessionId)
+                },
+                removeAction: { [weak self] sessionId in
+                    self?.removeSession(sessionId: sessionId)
                 },
                 repromptAction: { [weak self] sessionId, text in
                     self?.repromptSession(sessionId: sessionId, text: text)
@@ -1427,6 +1460,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
         headerUsageSecondary.frame = NSRect(x: width - usageWidth - 20, y: 31, width: usageWidth, height: 14)
         commandContainer.frame = NSRect(x: 20, y: 59, width: width - 40, height: 28)
         commandField.frame = NSRect(x: 0, y: 0, width: commandContainer.bounds.width, height: 19)
+        positionCommandGhost()
         commandUnderline.frame = NSRect(x: 0, y: 24, width: commandContainer.bounds.width, height: 1)
         scrollView.frame = NSRect(x: 16, y: 100, width: width - 28, height: height - 116)
         guard let window = overlayWindow else {
@@ -1539,6 +1573,114 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             commandField.textColor = NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.96)
             commandUnderline.layer?.backgroundColor = NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.3).cgColor
         }
+        updateCommandGhost()
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSTextField) === commandField else {
+            return
+        }
+        commandStatus = .idle
+        applyCommandTextStyling()
+        updateCommandGhost()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === commandField else {
+            return false
+        }
+        if commandSelector == #selector(NSResponder.insertTab(_:)) {
+            applyCommandCompletion(textView: textView)
+            return true
+        }
+        return false
+    }
+
+    private func applyCommandCompletion(textView: NSTextView) {
+        guard let completed = completedCommandText(for: commandField.stringValue) else {
+            return
+        }
+        commandField.stringValue = completed
+        textView.string = completed
+        textView.setSelectedRange(NSRange(location: completed.count, length: 0))
+        applyCommandTextStyling()
+        updateCommandGhost()
+    }
+
+    private func updateCommandGhost() {
+        let suggestion = commandSuggestion(for: commandField.stringValue)
+        commandGhostLabel.stringValue = suggestion?.suffix ?? ""
+        commandGhostLabel.isHidden = suggestion == nil
+        positionCommandGhost()
+    }
+
+    private func positionCommandGhost() {
+        let typedWidth = measuredCommandWidth(commandField.stringValue)
+        commandGhostLabel.frame = NSRect(
+            x: min(commandContainer.bounds.width - 8, typedWidth),
+            y: 0,
+            width: max(0, commandContainer.bounds.width - typedWidth),
+            height: 19
+        )
+    }
+
+    private func applyCommandTextStyling() {
+        guard let editor = overlayWindow?.fieldEditor(false, for: commandField) as? NSTextView,
+              editor.string == commandField.stringValue else {
+            return
+        }
+        let selectedRange = editor.selectedRange()
+        let fullRange = NSRange(location: 0, length: (editor.string as NSString).length)
+        editor.textStorage?.setAttributes([
+            .font: overlayFont(size: 12, weight: .medium),
+            .foregroundColor: NSColor.labelColor.withAlphaComponent(0.94)
+        ], range: fullRange)
+        if let commandRange = firstCommandRange(in: editor.string) {
+            editor.textStorage?.addAttribute(
+                .foregroundColor,
+                value: NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.98),
+                range: commandRange
+            )
+        }
+        editor.setSelectedRange(selectedRange)
+    }
+
+    private func firstCommandRange(in text: String) -> NSRange? {
+        guard text.hasPrefix("/") else {
+            return nil
+        }
+        let nsText = text as NSString
+        let end = text.firstIndex(where: { $0.isWhitespace }).map { text.distance(from: text.startIndex, to: $0) } ?? nsText.length
+        return NSRange(location: 0, length: end)
+    }
+
+    private func commandSuggestion(for text: String) -> (full: String, suffix: String)? {
+        let commands = ["/init", "/working-dir"]
+        let prefix = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard prefix.hasPrefix("/"), !prefix.contains(where: { $0.isWhitespace }) else {
+            return nil
+        }
+        guard let full = commands.first(where: { $0.hasPrefix(prefix) && $0 != prefix }) else {
+            return nil
+        }
+        return (full, String(full.dropFirst(prefix.count)))
+    }
+
+    private func completedCommandText(for text: String) -> String? {
+        guard let suggestion = commandSuggestion(for: text) else {
+            return nil
+        }
+        return suggestion.full + " "
+    }
+
+    private func measuredCommandWidth(_ text: String) -> CGFloat {
+        guard !text.isEmpty else {
+            return 0
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: overlayFont(size: 12, weight: .medium)
+        ]
+        return ceil((text as NSString).size(withAttributes: attributes).width)
     }
 
     private func commandPlaceholder() -> String {
@@ -1554,16 +1696,23 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func currentScreenVisibleFrame() -> NSRect? {
+        currentScreenGeometry()?.visibleFrame
+    }
+
+    private func currentScreenGeometry() -> (screenFrame: NSRect, visibleFrame: NSRect)? {
         let mouseLocation = NSEvent.mouseLocation
         if let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) }) {
-            return screen.visibleFrame
+            return (screen.frame, screen.visibleFrame)
         }
 
         if let screen = statusItem.button?.window?.screen {
-            return screen.visibleFrame
+            return (screen.frame, screen.visibleFrame)
         }
 
-        return NSScreen.main?.visibleFrame
+        guard let screen = NSScreen.main else {
+            return nil
+        }
+        return (screen.frame, screen.visibleFrame)
     }
 
     @objc private func toggleOverlay() {
@@ -1760,6 +1909,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 }
                 count = parsed
                 index += 2
+            case let shorthand where shorthand.range(of: #"^-[1-9]$"#, options: .regularExpression) != nil:
+                count = Int(String(shorthand.dropFirst())) ?? count
+                index += 1
             case "--profile":
                 guard index + 1 < tokens.count else {
                     return .failure("Missing value for --profile")
@@ -1780,7 +1932,10 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             }
             projectPath = resolveProject(project, base: base)
         } else {
-            return .failure("Usage: /init --project <name>")
+            guard let base = stateStore.commandWorkingDirectory() else {
+                return .failure("Set /working-dir first")
+            }
+            projectPath = base
         }
 
         var isDirectory: ObjCBool = false
@@ -1915,7 +2070,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
             let profilePart = request.profile.map { " with profile \(appleScriptString($0))" } ?? " with default profile"
             lines.append("create window\(profilePart)")
             lines.append("delay 0.15")
-            lines.append("tell current session of current window to write text \(appleScriptString(launchCommand))")
             if index < frames.count {
                 lines.append("tell application \"System Events\"")
                 lines.append("tell process \"iTerm2\"")
@@ -1924,6 +2078,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 lines.append("end tell")
                 lines.append("end tell")
             }
+            lines.append("tell current session of current window to write text \(appleScriptString(launchCommand))")
         }
 
         lines.append("end tell")
@@ -1953,15 +2108,15 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func tiledFrames(count: Int) -> [AppleScriptFrame] {
-        guard let frame = currentScreenVisibleFrame() else {
+        guard let geometry = currentScreenGeometry() else {
             return []
         }
+        let frame = geometry.visibleFrame
 
         let columns = count <= 1 ? 1 : count <= 2 ? count : count <= 4 ? 2 : 3
         let rows = Int(ceil(Double(count) / Double(columns)))
         let cellWidth = frame.width / CGFloat(columns)
         let cellHeight = frame.height / CGFloat(rows)
-        let screenHeight = NSScreen.main?.frame.height ?? frame.maxY
 
         return (0..<count).map { index in
             let row = index / columns
@@ -1971,9 +2126,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 y: frame.maxY - CGFloat(row + 1) * cellHeight,
                 width: cellWidth,
                 height: cellHeight
-            ).insetBy(dx: 3, dy: 3)
-            let top = Int((screenHeight - rect.maxY).rounded())
-            let bottom = Int((screenHeight - rect.minY).rounded())
+            )
+            let top = Int((geometry.screenFrame.maxY - rect.maxY).rounded())
+            let bottom = Int((geometry.screenFrame.maxY - rect.minY).rounded())
             return AppleScriptFrame(
                 left: Int(rect.minX.rounded()),
                 top: top,
@@ -1992,6 +2147,32 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
 
     private func shellQuote(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
+    private func removeSession(sessionId: String) {
+        guard let item = items[sessionId], let removeCommand = item.removeCommand else {
+            NSSound.beep()
+            return
+        }
+
+        items.removeValue(forKey: sessionId)
+        stateStore.remove(sessionId: sessionId)
+        repromptStates.removeValue(forKey: sessionId)
+        refresh()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let success = self?.launch(removeCommand, waitForExit: true) ?? false
+            DispatchQueue.main.async {
+                guard let self else {
+                    return
+                }
+                if !success {
+                    self.logger.log("removeSession failed sessionId=\(sessionId)")
+                    self.loadSnapshotIfNeeded(reason: "remove-failed", allowSameRaw: true)
+                    NSSound.beep()
+                }
+            }
+        }
     }
 
     private func repromptSession(sessionId: String, text: String) {
