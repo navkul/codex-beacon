@@ -155,10 +155,7 @@ sessionsCommand
   .action((sessionId: string) => {
     const removed = removeSession(sessionId);
     replaceOverlaySnapshot(listSessions());
-    if (!removed) {
-      throw new Error(`Unknown session: ${sessionId}`);
-    }
-    process.stdout.write(`Removed ${sessionId}\n`);
+    process.stdout.write(`${removed ? 'Removed' : 'Already removed'} ${sessionId}\n`);
   });
 
 const cloudCommand = program

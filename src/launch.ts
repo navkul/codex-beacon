@@ -137,8 +137,8 @@ function runAppleScript(script: string): string | undefined {
 }
 
 function runITermAppleScript(body: string): string | undefined {
-  const script = `tell application "iTerm2"\n${body}\nend tell`;
-  return runAppleScript(script) ?? runAppleScript(script.replace('"iTerm2"', '"iTerm"'));
+  const script = `tell application id "com.googlecode.iterm2"\n${body}\nend tell`;
+  return runAppleScript(script);
 }
 
 function parseNumber(value?: string): number | undefined {

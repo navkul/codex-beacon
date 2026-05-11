@@ -36,6 +36,7 @@ export function focusSession(sessionId: string): void {
   const terminal = (session.terminalApp ?? '').toLowerCase();
   if (terminal.includes('iterm')) {
     if (focusITermSession(session)) {
+      raiseITerm();
       return;
     }
     throw new Error(`Unable to locate the original iTerm session for ${session.displayName}`);
@@ -58,7 +59,12 @@ export function focusSession(sessionId: string): void {
     throw new Error(`Unable to locate the original Terminal.app window for ${session.displayName}`);
   }
 
-  if (focusITermSession(session) || focusTerminalSession(session)) {
+  if (focusITermSession(session)) {
+    raiseITerm();
+    return;
+  }
+
+  if (focusTerminalSession(session)) {
     return;
   }
 
@@ -263,14 +269,11 @@ function runITermBooleanScript(body: string): boolean {
 if application id "com.googlecode.iterm2" is not running then
   return false
 end if
-tell application "iTerm2"
+tell application id "com.googlecode.iterm2"
 ${body}
 end tell
 `;
-  if (runAppleScriptBoolean(script)) {
-    return true;
-  }
-  return runAppleScriptBoolean(script.replace('"iTerm2"', '"iTerm"'));
+  return runAppleScriptBoolean(script);
 }
 
 function focusITermSession(session: NonNullable<ReturnType<typeof getSession>>): boolean {
@@ -280,6 +283,19 @@ function focusITermSession(session: NonNullable<ReturnType<typeof getSession>>):
     focusITermByWindowAndTab(session.terminalWindowId, session.terminalTabIndex) ||
     focusITermByWindowId(session.terminalWindowId)
   );
+}
+
+function raiseITerm(): void {
+  runAppleScript(`
+tell application id "com.googlecode.iterm2" to activate
+tell application "System Events"
+  if exists process "iTerm2" then
+    set frontmost of process "iTerm2" to true
+  else if exists process "iTerm" then
+    set frontmost of process "iTerm" to true
+  end if
+end tell
+`);
 }
 
 function focusTerminalSession(session: NonNullable<ReturnType<typeof getSession>>): boolean {

@@ -1773,8 +1773,21 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard let item = items[sessionId] else {
             return
         }
-        launch(item.focusCommand)
-        overlayWindow?.orderOut(nil)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let success = self?.launch(item.focusCommand, waitForExit: true) ?? false
+            DispatchQueue.main.async {
+                guard let self else {
+                    return
+                }
+                if success {
+                    self.overlayWindow?.orderOut(nil)
+                } else {
+                    self.logger.log("openSession failed sessionId=\(sessionId)")
+                    self.loadSnapshotIfNeeded(reason: "focus-failed", allowSameRaw: true)
+                    NSSound.beep()
+                }
+            }
+        }
     }
 
     @objc private func submitOverlayCommand(_ sender: NSTextField) {
@@ -1882,6 +1895,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         while index < tokens.count {
             let token = tokens[index]
             switch token {
+            case "--":
+                index = tokens.count
             case "--project":
                 guard index + 1 < tokens.count else {
                     return .failure("Missing value for --project")
@@ -2019,61 +2034,155 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     private func runInitCommand(_ request: InitCommandRequest) -> CommandParseResult<String> {
-        guard let script = initAppleScript(request) else {
+        guard let launchCommand = navexLaunchShellCommand(projectPath: request.projectPath) else {
             return .failure("Cannot locate navex CLI")
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        let pipe = Pipe()
-        process.standardError = pipe
-
-        do {
-            logger.log("initCommand project=\(request.projectPath) count=\(request.count) profile=\(request.profile ?? "")")
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus == 0 {
-                let name = URL(fileURLWithPath: request.projectPath).lastPathComponent
-                return .success("Launched \(request.count) \(name) session\(request.count == 1 ? "" : "s")")
-            }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let message = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return .failure(message?.isEmpty == false ? message! : "iTerm launch failed")
-        } catch {
-            return .failure(error.localizedDescription)
+        logger.log("initCommand project=\(request.projectPath) count=\(request.count) profile=\(request.profile ?? "")")
+        let launchResult = runAppleScript(initLaunchITermScript())
+        guard launchResult.terminationStatus == 0 else {
+            logger.log("initCommand launchFailed error=\(launchResult.message)")
+            return .failure("Unable to launch iTerm: \(launchResult.message)")
         }
-    }
 
-    private func initAppleScript(_ request: InitCommandRequest) -> String? {
-        guard let launchCommand = navexLaunchShellCommand(projectPath: request.projectPath) else {
-            return nil
+        guard waitForITermReady() else {
+            logger.log("initCommand readyTimeout")
+            return .failure("Timed out waiting for iTerm to become scriptable")
         }
 
         let frames = tiledFrames(count: request.count)
-        var lines: [String] = [
-            "tell application \"iTerm2\"",
-            "activate"
-        ]
-
         for index in 0..<request.count {
-            let profilePart = request.profile.map { " with profile \(appleScriptString($0))" } ?? " with default profile"
-            lines.append("create window\(profilePart)")
-            lines.append("delay 0.15")
-            if index < frames.count {
-                lines.append("tell application \"System Events\"")
-                lines.append("tell process \"iTerm2\"")
-                lines.append("set position of front window to {\(frames[index].left), \(frames[index].top)}")
-                lines.append("set size of front window to {\(frames[index].width), \(frames[index].height)}")
-                lines.append("end tell")
-                lines.append("end tell")
+            switch createITermCodexWindow(request: request, launchCommand: launchCommand, index: index) {
+            case .failure(let message):
+                logger.log("initCommand createFailed index=\(index) error=\(message)")
+                return .failure(message)
+            case .success(let windowId):
+                if index < frames.count {
+                    tileITermWindow(frame: frames[index], windowId: windowId)
+                }
             }
-            lines.append("tell current session of current window to write text \(appleScriptString(launchCommand))")
         }
 
-        lines.append("end tell")
-        return lines.joined(separator: "\n")
+        let name = URL(fileURLWithPath: request.projectPath).lastPathComponent
+        return .success("Launched \(request.count) \(name) session\(request.count == 1 ? "" : "s")")
+    }
+
+    private struct AppleScriptRunResult {
+        let terminationStatus: Int32
+        let output: String
+        let error: String
+
+        var message: String {
+            let trimmedError = error.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedError.isEmpty {
+                return trimmedError
+            }
+            let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedOutput.isEmpty {
+                return trimmedOutput
+            }
+            return "osascript exited with status \(terminationStatus)"
+        }
+    }
+
+    private func runAppleScript(_ script: String) -> AppleScriptRunResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            return AppleScriptRunResult(terminationStatus: process.terminationStatus, output: output, error: error)
+        } catch {
+            return AppleScriptRunResult(terminationStatus: 1, output: "", error: error.localizedDescription)
+        }
+    }
+
+    private func initLaunchITermScript() -> String {
+        """
+        tell application id "com.googlecode.iterm2"
+          launch
+          activate
+        end tell
+        """
+    }
+
+    private func waitForITermReady() -> Bool {
+        for _ in 0..<40 {
+            let result = runAppleScript("""
+            tell application id "com.googlecode.iterm2"
+              activate
+              return version
+            end tell
+            """)
+            if result.terminationStatus == 0 {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return false
+    }
+
+    private func createITermCodexWindow(request: InitCommandRequest, launchCommand: String, index: Int) -> CommandParseResult<String> {
+        let createCommand = request.profile
+            .map { "create window with profile \(appleScriptString($0))" }
+            ?? "create window with default profile"
+        let script = """
+        tell application id "com.googlecode.iterm2"
+          activate
+          \(createCommand)
+          delay 0.2
+          tell current session of current window to write text \(appleScriptString(launchCommand))
+          return id of current window as string
+        end tell
+        """
+
+        var lastMessage = "iTerm window creation failed"
+        for attempt in 1...12 {
+            let result = runAppleScript(script)
+            if result.terminationStatus == 0 {
+                let windowId = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                return .success(windowId)
+            }
+            lastMessage = result.message
+            logger.log("initCommand createRetry index=\(index) attempt=\(attempt) error=\(lastMessage)")
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return .failure("Unable to create iTerm window: \(lastMessage)")
+    }
+
+    private func tileITermWindow(frame: AppleScriptFrame, windowId: String) {
+        let script = """
+        try
+          tell application "System Events"
+            set targetProcess to missing value
+            if exists process "iTerm2" then
+              set targetProcess to process "iTerm2"
+            else if exists process "iTerm" then
+              set targetProcess to process "iTerm"
+            end if
+            if targetProcess is not missing value then
+              tell targetProcess
+                set frontmost to true
+                set targetWindow to front window
+                set position of targetWindow to {\(frame.left), \(frame.top)}
+                set size of targetWindow to {\(frame.width), \(frame.height)}
+              end tell
+            end if
+          end tell
+        end try
+        """
+        let result = runAppleScript(script)
+        if result.terminationStatus != 0 {
+            logger.log("initCommand tileSkipped windowId=\(windowId) error=\(result.message)")
+        }
     }
 
     private func navexLaunchShellCommand(projectPath: String) -> String? {
