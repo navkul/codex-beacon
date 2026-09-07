@@ -3,7 +3,6 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadConfig, overlayControlPath, overlayHelperLogPath, overlaySnapshotPath, overlayStatePath } from './config.js';
-import { canRepromptSession } from './reprompt.js';
 import { listSessions } from './session-registry.js';
 import { SessionKind, SessionRecord, SessionStatus, SessionUsageSnapshot, SummaryState } from './types.js';
 
@@ -13,7 +12,7 @@ interface OverlayCommand {
 }
 
 interface OverlayEvent {
-  type: 'show' | 'clear';
+  type: 'show';
   sessionId: string;
   displayName?: string;
   summary?: string;
@@ -26,7 +25,6 @@ interface OverlayEvent {
   usage?: SessionUsageSnapshot;
   timestamp: string;
   focusCommand?: OverlayCommand;
-  repromptCommand?: OverlayCommand;
   removeCommand?: OverlayCommand;
   presentation?: OverlayPresentation;
 }
@@ -54,10 +52,10 @@ function truncate(text: string, limit: number): string {
   return `${text.slice(0, Math.max(0, limit - 1))}…`;
 }
 
-export function sendSessionNotification(session: SessionRecord): void {
+export function sendSessionCompletionAlert(session: SessionRecord): void {
   const event = overlayShowEvent(session);
   updateOverlaySnapshot(event);
-  sendOverlayEvent(event);
+  ensureOverlayHelper(true);
 }
 
 export function replaceOverlaySnapshot(sessions: SessionRecord[]): void {
@@ -85,29 +83,9 @@ function overlayShowEvent(session: SessionRecord, presentation = currentPresenta
     usage: session.lastUsage,
     timestamp: new Date().toISOString(),
     focusCommand: focusCommand(session.sessionId),
-    repromptCommand: session.status === 'waiting' && canRepromptSession(session) ? repromptCommand(session.sessionId) : undefined,
     removeCommand: removeCommand(session.sessionId),
     presentation
   };
-}
-
-export function clearSessionNotification(sessionId: string): void {
-  const event: OverlayEvent = {
-    type: 'clear',
-    sessionId,
-    timestamp: new Date().toISOString()
-  };
-  updateOverlaySnapshot(event);
-  sendOverlayEvent(event);
-}
-
-function sendOverlayEvent(event: OverlayEvent): void {
-  const canReuseProcess = overlayProcess && !overlayProcess.killed;
-  if (event.type === 'clear' && !canReuseProcess) {
-    return;
-  }
-
-  ensureOverlayHelper(event.type === 'show');
 }
 
 export function ensureOverlayHelper(showOnLaunch: boolean): ChildProcess | undefined {
@@ -178,12 +156,8 @@ function updateOverlaySnapshot(event: OverlayEvent): void {
     snapshot.presentation = event.presentation;
   }
 
-  if (event.type === 'clear') {
-    snapshot.items = snapshot.items.filter((item) => item.sessionId !== event.sessionId);
-  } else {
-    snapshot.items = snapshot.items.filter((item) => item.sessionId !== event.sessionId);
-    snapshot.items.unshift(event);
-  }
+  snapshot.items = snapshot.items.filter((item) => item.sessionId !== event.sessionId);
+  snapshot.items.unshift(event);
 
   writeFileSync(overlaySnapshotPath(), JSON.stringify(snapshot, null, 2));
 }
@@ -202,11 +176,12 @@ function currentPresentation(): OverlayPresentation {
 
 function overlaySummary(session: SessionRecord): string {
   const config = loadConfig();
+  if (session.kind !== 'cloud-task' && session.status === 'active') {
+    return 'Working…';
+  }
   const fallback = session.kind === 'cloud-task'
     ? cloudOverlaySummary(session)
-    : session.status === 'active'
-    ? 'Currently working in the terminal.'
-    : 'Ready for your next prompt.';
+    : 'Finished. Open the session when you are ready to continue.';
   return truncate(session.lastSummary ?? fallback, config.overlaySummaryMaxChars);
 }
 
@@ -279,14 +254,6 @@ function focusCommand(sessionId: string): OverlayCommand {
   return {
     executable: process.execPath,
     args: [cliPath, 'focus', '--session-id', sessionId]
-  };
-}
-
-function repromptCommand(sessionId: string): OverlayCommand {
-  const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
-  return {
-    executable: process.execPath,
-    args: [cliPath, 'reprompt', '--session-id', sessionId, '--message']
   };
 }
 

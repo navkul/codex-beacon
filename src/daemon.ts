@@ -3,7 +3,7 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { syncCloudTasksQuietly } from './cloud.js';
 import { loadConfig, socketPath } from './config.js';
 import { listSessions, pruneStaleSessions, removeSessionsByLauncherPid, setSessionStopSnapshot, upsertFromEvent } from './session-registry.js';
-import { replaceOverlaySnapshot, sendSessionNotification } from './notify.js';
+import { replaceOverlaySnapshot, sendSessionCompletionAlert } from './notify.js';
 import { summarizeTranscriptTail } from './summary.js';
 import { DaemonEvent } from './types.js';
 import { usageSnapshotFromTranscript } from './usage.js';
@@ -34,7 +34,7 @@ export function runDaemon(): void {
   server.on('listening', () => {
     pruneStaleSessions();
     syncCloudTasksQuietly({ limit: '20' });
-    replayWaitingSessions();
+    replayTrackedSessions();
     startCloudSyncTimer();
   });
 }
@@ -71,7 +71,7 @@ function handleEvent(event: DaemonEvent): void {
     const usage = usageSnapshotFromTranscript(event.transcriptPath ?? session.transcriptPath);
     const updated = setSessionStopSnapshot(session.sessionId, summary.text, summary.state, usage) ?? session;
     replaceOverlaySnapshot(listSessions());
-    sendSessionNotification({
+    sendSessionCompletionAlert({
       ...updated,
       lastSummary: summary.text,
       lastSummaryState: summary.state,
@@ -80,6 +80,6 @@ function handleEvent(event: DaemonEvent): void {
   }
 }
 
-function replayWaitingSessions(): void {
+function replayTrackedSessions(): void {
   replaceOverlaySnapshot(listSessions());
 }

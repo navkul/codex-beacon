@@ -1,4 +1,4 @@
-export type SessionStatus = 'active' | 'waiting' | 'done' | 'failed';
+export type SessionStatus = 'active' | 'done' | 'failed' | 'waiting';
 export type SessionKind = 'local-interactive' | 'cloud-task';
 export type SummaryState = 'ready' | 'done' | 'blocked' | 'failed' | 'needs-input';
 export type SummaryStyle = 'smart' | 'raw';
