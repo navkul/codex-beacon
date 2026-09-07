@@ -74,7 +74,7 @@ function renderHooksJson(): string {
             {
               type: 'command',
               command: hookCommand('user-prompt-submit'),
-              statusMessage: 'Navex clearing delivered notifications'
+              statusMessage: 'Navex marking agent as working'
             }
           ]
         }
@@ -86,7 +86,7 @@ function renderHooksJson(): string {
               type: 'command',
               command: hookCommand('stop'),
               timeout: 5,
-              statusMessage: 'Navex queueing session notification'
+              statusMessage: 'Navex alerting when the agent is done'
             }
           ]
         }

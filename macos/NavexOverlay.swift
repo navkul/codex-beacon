@@ -61,7 +61,6 @@ struct OverlayEvent: Decodable {
     let usage: SessionUsageSnapshot?
     let timestamp: String?
     let focusCommand: CommandSpec?
-    let repromptCommand: CommandSpec?
     let removeCommand: CommandSpec?
     let presentation: OverlayPresentation?
 }
@@ -79,26 +78,7 @@ struct OverlayItem {
     let usage: SessionUsageSnapshot?
     let timestamp: String
     let focusCommand: CommandSpec
-    let repromptCommand: CommandSpec?
     let removeCommand: CommandSpec?
-}
-
-enum RepromptDisplayState {
-    case submitting(token: String)
-    case unconfirmed
-
-    var isSubmitting: Bool {
-        if case .submitting = self {
-            return true
-        }
-        return false
-    }
-}
-
-extension Optional where Wrapped == RepromptDisplayState {
-    var isSubmitting: Bool {
-        self?.isSubmitting == true
-    }
 }
 
 struct OverlaySnapshot: Decodable {
@@ -114,14 +94,6 @@ struct OverlayControlCommand: Decodable {
 
 struct OverlayStateFile: Codable {
     var orderedSessionIds: [String]
-    var workingDirectory: String?
-}
-
-enum OverlayCommandStatus {
-    case idle
-    case working(String)
-    case success(String)
-    case failure(String)
 }
 
 final class OverlayLogger {
@@ -452,13 +424,11 @@ private let hotkeyEventCallback: EventHandlerUPP = { _, eventRef, userData in
 final class OverlayStateStore {
     private let url: URL
     private var orderedSessionIds: [String]
-    private var workingDirectory: String?
 
     init(url: URL) {
         self.url = url
         let loaded = Self.load(url: url)
         self.orderedSessionIds = loaded.orderedSessionIds
-        self.workingDirectory = loaded.workingDirectory
     }
 
     func orderedIds() -> [String] {
@@ -489,19 +459,10 @@ final class OverlayStateStore {
         save()
     }
 
-    func commandWorkingDirectory() -> String? {
-        workingDirectory
-    }
-
-    func setCommandWorkingDirectory(_ path: String) {
-        workingDirectory = path
-        save()
-    }
-
     private func save() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let file = OverlayStateFile(orderedSessionIds: orderedSessionIds, workingDirectory: workingDirectory)
+        let file = OverlayStateFile(orderedSessionIds: orderedSessionIds)
         if let data = try? encoder.encode(file) {
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: url, options: .atomic)
@@ -513,7 +474,7 @@ final class OverlayStateStore {
             let data = try? Data(contentsOf: url),
             let state = try? JSONDecoder().decode(OverlayStateFile.self, from: data)
         else {
-            return OverlayStateFile(orderedSessionIds: [], workingDirectory: nil)
+            return OverlayStateFile(orderedSessionIds: [])
         }
         return state
     }
@@ -531,8 +492,6 @@ final class OverlayRowView: NSView {
         static let contentToActionsGap: CGFloat = 14
         static let dotSize: CGFloat = 6
         static let summaryMinHeight: CGFloat = 16
-        static let repromptHeight: CGFloat = 16
-        static let underlineTop: CGFloat = 3
     }
 
     let sessionId: String
@@ -541,22 +500,16 @@ final class OverlayRowView: NSView {
     private let kind: String
     private let openAction: (String) -> Void
     private let removeAction: (String) -> Void
-    private let repromptAction: (String, String) -> Void
     private let moveAction: (String, NSPoint) -> Void
     private let actionButtonsStack = NSStackView()
-    private let repromptField = NSTextField()
-    private let repromptContainer = NSView()
-    private var workingTimer: Timer?
     private var trackingPoint: NSPoint?
     private var isDraggingRow = false
 
     init(
         item: OverlayItem,
         presentation: OverlayPresentation,
-        repromptState: RepromptDisplayState?,
         openAction: @escaping (String) -> Void,
         removeAction: @escaping (String) -> Void,
-        repromptAction: @escaping (String, String) -> Void,
         moveAction: @escaping (String, NSPoint) -> Void
     ) {
         self.sessionId = item.sessionId
@@ -564,7 +517,6 @@ final class OverlayRowView: NSView {
         self.kind = item.kind
         self.openAction = openAction
         self.removeAction = removeAction
-        self.repromptAction = repromptAction
         self.moveAction = moveAction
         super.init(frame: .zero)
 
@@ -649,31 +601,6 @@ final class OverlayRowView: NSView {
         let contentColumn = NSView()
         contentColumn.translatesAutoresizingMaskIntoConstraints = false
 
-        repromptContainer.translatesAutoresizingMaskIntoConstraints = false
-
-        repromptField.isBordered = false
-        repromptField.isBezeled = false
-        repromptField.drawsBackground = false
-        repromptField.focusRingType = .none
-        repromptField.font = overlayFont(size: 11, weight: .medium)
-        repromptField.textColor = NSColor.labelColor.withAlphaComponent(0.92)
-        repromptField.placeholderString = repromptPlaceholder(for: item, repromptState: repromptState)
-        repromptField.isEditable = item.status == .waiting && item.repromptCommand != nil && item.kind != "cloud-task" && !repromptState.isSubmitting
-        repromptField.isSelectable = item.status == .waiting && item.repromptCommand != nil && item.kind != "cloud-task" && !repromptState.isSubmitting
-        repromptField.stringValue = initialRepromptValue(for: item, repromptState: repromptState)
-        repromptField.target = self
-        repromptField.action = #selector(submitReprompt(_:))
-        repromptField.translatesAutoresizingMaskIntoConstraints = false
-
-        let underline = NSView()
-        underline.translatesAutoresizingMaskIntoConstraints = false
-        underline.wantsLayer = true
-        underline.layer?.cornerRadius = 0.5
-        underline.layer?.backgroundColor = underlineColor(for: item, repromptState: repromptState).cgColor
-
-        repromptContainer.addSubview(repromptField)
-        repromptContainer.addSubview(underline)
-
         let bodyStack = NSStackView()
         bodyStack.orientation = .vertical
         bodyStack.alignment = .leading
@@ -683,7 +610,6 @@ final class OverlayRowView: NSView {
         if presentation.summaryVisible {
             bodyStack.addArrangedSubview(summary)
         }
-        bodyStack.addArrangedSubview(repromptContainer)
 
         addSubview(contentColumn)
         contentColumn.addSubview(bodyStack)
@@ -705,34 +631,15 @@ final class OverlayRowView: NSView {
             bodyStack.trailingAnchor.constraint(equalTo: contentColumn.trailingAnchor),
             bodyStack.topAnchor.constraint(equalTo: contentColumn.topAnchor),
             bodyStack.bottomAnchor.constraint(equalTo: contentColumn.bottomAnchor),
-            repromptContainer.widthAnchor.constraint(equalTo: contentColumn.widthAnchor),
-            repromptField.leadingAnchor.constraint(equalTo: repromptContainer.leadingAnchor),
-            repromptField.trailingAnchor.constraint(equalTo: repromptContainer.trailingAnchor),
-            repromptField.topAnchor.constraint(equalTo: repromptContainer.topAnchor),
-            underline.leadingAnchor.constraint(equalTo: repromptContainer.leadingAnchor),
-            underline.trailingAnchor.constraint(equalTo: repromptContainer.trailingAnchor),
-            underline.topAnchor.constraint(equalTo: repromptField.bottomAnchor, constant: Metrics.underlineTop),
-            underline.heightAnchor.constraint(equalToConstant: 1),
-            underline.bottomAnchor.constraint(equalTo: repromptContainer.bottomAnchor),
-            repromptField.heightAnchor.constraint(equalToConstant: Metrics.repromptHeight),
             actionButtonsStack.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.topInset),
             actionButtonsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.horizontalInset),
             actionButtonsStack.widthAnchor.constraint(equalToConstant: Metrics.actionButtonSize)
         ])
 
-        if item.status == .active && item.kind != "cloud-task" {
-            startStatusAnimation(frames: ["Working.", "Working..", "Working...", "Working.."])
-        } else if repromptState.isSubmitting {
-            startStatusAnimation(frames: ["Submitting.", "Submitting..", "Submitting...", "Submitting.."])
-        }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        workingTimer?.invalidate()
     }
 
     override var acceptsFirstResponder: Bool {
@@ -792,14 +699,6 @@ final class OverlayRowView: NSView {
         removeAction(sessionId)
     }
 
-    @objc private func submitReprompt(_ sender: NSTextField) {
-        let text = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            return
-        }
-        repromptAction(sessionId, text)
-    }
-
     private func label(_ text: String, size: CGFloat, color: NSColor, weight: NSFont.Weight) -> NSTextField {
         let field = NSTextField(labelWithString: text)
         field.font = overlayFont(size: size, weight: weight)
@@ -829,12 +728,7 @@ final class OverlayRowView: NSView {
 
     private func isInteractiveArea(_ point: NSPoint) -> Bool {
         let actionRect = convert(actionButtonsStack.bounds, from: actionButtonsStack).insetBy(dx: -8, dy: -8)
-        if actionRect.contains(point) {
-            return true
-        }
-
-        let repromptRect = convert(repromptContainer.bounds, from: repromptContainer).insetBy(dx: 0, dy: -4)
-        return repromptRect.contains(point)
+        return actionRect.contains(point)
     }
 
     private func stateColor(_ state: SummaryState) -> NSColor {
@@ -856,82 +750,13 @@ final class OverlayRowView: NSView {
         }
     }
 
-    private func repromptPlaceholder(for item: OverlayItem, repromptState: RepromptDisplayState?) -> String {
-        if item.kind == "cloud-task" {
-            return cloudStatusText(for: item)
-        }
-        if item.status == .active {
-            return "Working."
-        }
-        if case .unconfirmed = repromptState {
-            return "Reprompt not confirmed"
-        }
-        return item.repromptCommand == nil ? "Reprompt unavailable" : "Reprompt…"
-    }
-
-    private func initialRepromptValue(for item: OverlayItem, repromptState: RepromptDisplayState?) -> String {
-        if item.kind == "cloud-task" {
-            return cloudStatusText(for: item)
-        }
-        if item.status == .active {
-            return "Working."
-        }
-        if repromptState.isSubmitting {
-            return "Submitting."
-        }
-        return ""
-    }
-
-    private func underlineColor(for item: OverlayItem, repromptState: RepromptDisplayState?) -> NSColor {
-        if item.kind == "cloud-task" {
-            return NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.18)
-        }
-        if item.status == .active {
-            return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.26)
-        }
-        if repromptState.isSubmitting {
-            return NSColor(calibratedRed: 0.43, green: 0.71, blue: 0.98, alpha: 0.22)
-        }
-        if case .unconfirmed = repromptState {
-            return NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.24)
-        }
-        return NSColor.white.withAlphaComponent(item.repromptCommand == nil ? 0.06 : 0.16)
-    }
-
-    private func startStatusAnimation(frames: [String]) {
-        var index = 0
-        repromptField.stringValue = frames[index]
-        workingTimer = Timer.scheduledTimer(withTimeInterval: 0.38, repeats: true) { [weak self] timer in
-            guard let self else {
-                timer.invalidate()
-                return
-            }
-            index = (index + 1) % frames.count
-            self.repromptField.stringValue = frames[index]
-        }
-    }
-
-    private func cloudStatusText(for item: OverlayItem) -> String {
-        guard let cloudStatus = item.cloudStatus?.trimmingCharacters(in: .whitespacesAndNewlines), !cloudStatus.isEmpty else {
-            return "Cloud task"
-        }
-        let statusText = "Cloud \(cloudStatus)"
-        guard let detail = item.cloudDetail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
-            return statusText
-        }
-        return "\(statusText) · \(detail)"
-    }
 }
 
-final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
+final class OverlayApp: NSObject, NSApplicationDelegate {
     private enum LayoutMetrics {
         static let headerHeight: CGFloat = 66
-        static let commandHeight: CGFloat = 34
         static let footerHeight: CGFloat = 16
         static let rowSpacing: CGFloat = 10
-    }
-    private enum RepromptMetrics {
-        static let confirmationTimeout: TimeInterval = 6
     }
 
     private let logger = OverlayLogger.shared
@@ -940,13 +765,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private let rootView = FlippedView(frame: NSRect(x: 0, y: 0, width: 384, height: 180))
     private let backgroundView = FlippedView()
     private let headerTitle = NSTextField(labelWithString: "Navex")
-    private let headerSubtitle = NSTextField(labelWithString: "No live sessions")
+    private let headerSubtitle = NSTextField(labelWithString: "No tracked agents")
     private let headerUsagePrimary = NSTextField(labelWithString: "")
     private let headerUsageSecondary = NSTextField(labelWithString: "")
-    private let commandContainer = NSView()
-    private let commandField = NSTextField()
-    private let commandGhostLabel = NSTextField(labelWithString: "")
-    private let commandUnderline = NSView()
     private let scrollView = NSScrollView()
     private let rowsContainer = FlippedView(frame: .zero)
     private let stateStore = OverlayStateStore(url: OverlayApp.overlayStateURL())
@@ -961,8 +782,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     private let showOnLaunch = envValue("NAVEX_OVERLAY_SHOW_ON_LAUNCH") == "1"
     private var visibleRowsContentHeight: CGFloat = 1
     private var lastHandledControlId = ""
-    private var repromptStates: [String: RepromptDisplayState] = [:]
-    private var commandStatus: OverlayCommandStatus = .idle
     private lazy var hotkeyController = HotkeyController(target: self, logger: logger)
 
     override init() {
@@ -1103,33 +922,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         headerUsageSecondary.isSelectable = false
         headerUsageSecondary.lineBreakMode = .byTruncatingHead
 
-        commandContainer.wantsLayer = false
-        commandContainer.toolTip = "Navex command"
-
-        commandField.isBordered = false
-        commandField.isBezeled = false
-        commandField.drawsBackground = false
-        commandField.focusRingType = .none
-        commandField.font = overlayFont(size: 12, weight: .medium)
-        commandField.textColor = NSColor.labelColor.withAlphaComponent(0.94)
-        commandField.placeholderString = commandPlaceholder()
-        commandField.delegate = self
-        commandField.target = self
-        commandField.action = #selector(submitOverlayCommand(_:))
-
-        commandGhostLabel.font = overlayFont(size: 12, weight: .medium)
-        commandGhostLabel.textColor = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.38)
-        commandGhostLabel.isBezeled = false
-        commandGhostLabel.isBordered = false
-        commandGhostLabel.drawsBackground = false
-        commandGhostLabel.isEditable = false
-        commandGhostLabel.isSelectable = false
-        commandGhostLabel.lineBreakMode = .byClipping
-
-        commandUnderline.wantsLayer = true
-        commandUnderline.layer?.cornerRadius = 0.5
-        commandUnderline.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
-
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = true
@@ -1145,10 +937,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         backgroundView.addSubview(headerSubtitle)
         backgroundView.addSubview(headerUsagePrimary)
         backgroundView.addSubview(headerUsageSecondary)
-        commandContainer.addSubview(commandGhostLabel)
-        commandContainer.addSubview(commandField)
-        commandContainer.addSubview(commandUnderline)
-        backgroundView.addSubview(commandContainer)
         backgroundView.addSubview(scrollView)
 
         rootView.subviews.forEach { $0.removeFromSuperview() }
@@ -1259,17 +1047,16 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             nextItems[event.sessionId] = OverlayItem(
                 sessionId: event.sessionId,
                 displayName: event.displayName ?? "Codex",
-                summary: event.summary ?? "Ready for your next prompt.",
+                summary: event.summary ?? "Finished. Open the session when you are ready to continue.",
                 kind: event.kind ?? "local-interactive",
                 sourceLabel: event.sourceLabel,
-                status: event.status ?? .waiting,
+                status: event.status ?? .done,
                 cloudStatus: event.cloudStatus,
                 cloudDetail: event.cloudDetail,
                 state: event.state ?? .ready,
                 usage: event.usage,
                 timestamp: event.timestamp ?? "",
                 focusCommand: focusCommand,
-                repromptCommand: event.repromptCommand,
                 removeCommand: event.removeCommand
             )
         }
@@ -1280,7 +1067,8 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let completedIds = snapshot.items.compactMap { event -> String? in
             guard let item = nextItems[event.sessionId],
                   item.kind != "cloud-task",
-                  item.status == .waiting,
+                  item.status == .done || item.status == .waiting,
+                  items[item.sessionId]?.status != .done,
                   items[item.sessionId]?.status != .waiting else {
                 return nil
             }
@@ -1289,22 +1077,18 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         items = nextItems
         for sessionId in removedIds {
             stateStore.remove(sessionId: sessionId)
-            repromptStates.removeValue(forKey: sessionId)
         }
         if shouldRender || showOnLaunch {
             for sessionId in completedIds.reversed() {
                 stateStore.moveToTop(sessionId: sessionId)
             }
         }
-        for item in nextItems.values where item.status == .active {
-            repromptStates.removeValue(forKey: item.sessionId)
-        }
         logger.log("applySnapshot reason=\(reason) items=\(items.count) added=\(addedIds.count) removed=\(removedIds.count) completed=\(completedIds.count) render=\(shouldRender)")
         if shouldRender {
             refresh()
             if !completedIds.isEmpty {
                 showOverlay(reason: "\(reason)-completed")
-            } else if !addedIds.isEmpty && addedIds.contains(where: { nextItems[$0]?.status == .waiting || nextItems[$0]?.kind == "cloud-task" }) {
+            } else if !addedIds.isEmpty && addedIds.contains(where: { nextItems[$0]?.status == .done || nextItems[$0]?.status == .waiting || nextItems[$0]?.kind == "cloud-task" }) {
                 showOverlay(reason: reason)
             } else if items.isEmpty && !removedIds.isEmpty {
                 hideOverlay(reason: "\(reason)-clear")
@@ -1318,7 +1102,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         updateStatusItem()
         headerSubtitle.stringValue = headerSubtitleText()
         updateHeaderUsage()
-        updateCommandField()
 
         for subview in rowsContainer.subviews {
             subview.removeFromSuperview()
@@ -1332,15 +1115,11 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             let row = OverlayRowView(
                 item: item,
                 presentation: presentation,
-                repromptState: repromptStates[item.sessionId],
                 openAction: { [weak self] sessionId in
                     self?.openSession(sessionId: sessionId)
                 },
                 removeAction: { [weak self] sessionId in
                     self?.removeSession(sessionId: sessionId)
-                },
-                repromptAction: { [weak self] sessionId, text in
-                    self?.repromptSession(sessionId: sessionId, text: text)
                 },
                 moveAction: { [weak self] sessionId, point in
                     self?.moveSession(sessionId: sessionId, to: point)
@@ -1413,27 +1192,27 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     private func headerSubtitleText() -> String {
         guard !items.isEmpty else {
-            return "0 waiting"
+            return "No tracked agents"
         }
 
         let cloudCount = items.values.filter { $0.kind == "cloud-task" }.count
-        let waitingCount = items.values.filter { $0.kind != "cloud-task" && $0.status == .waiting }.count
+        let doneCount = items.values.filter { $0.kind != "cloud-task" && ($0.status == .done || $0.status == .waiting) }.count
         let activeCount = items.values.filter { $0.kind != "cloud-task" && $0.status == .active }.count
-        if cloudCount > 0 && waitingCount == 0 && activeCount == 0 {
+        if cloudCount > 0 && doneCount == 0 && activeCount == 0 {
             return "\(cloudCount) cloud"
         }
-        if waitingCount == 0 && cloudCount == 0 {
+        if doneCount == 0 && cloudCount == 0 {
             return "\(activeCount) live"
         }
         if activeCount == 0 && cloudCount == 0 {
-            return "\(waitingCount) waiting"
+            return "\(doneCount) done"
         }
         var parts: [String] = []
         if activeCount > 0 {
             parts.append("\(activeCount) live")
         }
-        if waitingCount > 0 {
-            parts.append("\(waitingCount) waiting")
+        if doneCount > 0 {
+            parts.append("\(doneCount) done")
         }
         if cloudCount > 0 {
             parts.append("\(cloudCount) cloud")
@@ -1442,7 +1221,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     private func layoutPanel() {
-        let height = LayoutMetrics.headerHeight + LayoutMetrics.commandHeight + max(visibleRowsContentHeight, 1) + LayoutMetrics.footerHeight
+        let height = LayoutMetrics.headerHeight + max(visibleRowsContentHeight, 1) + LayoutMetrics.footerHeight
         let width = CGFloat(presentation.width)
         let usageWidth: CGFloat = 214
         let leftWidth = max(132, width - usageWidth - 54)
@@ -1452,11 +1231,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         headerSubtitle.frame = NSRect(x: 20, y: 33, width: leftWidth, height: 14)
         headerUsagePrimary.frame = NSRect(x: width - usageWidth - 20, y: 14, width: usageWidth, height: 14)
         headerUsageSecondary.frame = NSRect(x: width - usageWidth - 20, y: 31, width: usageWidth, height: 14)
-        commandContainer.frame = NSRect(x: 20, y: 59, width: width - 40, height: 28)
-        commandField.frame = NSRect(x: 0, y: 0, width: commandContainer.bounds.width, height: 19)
-        positionCommandGhost()
-        commandUnderline.frame = NSRect(x: 0, y: 24, width: commandContainer.bounds.width, height: 1)
-        scrollView.frame = NSRect(x: 16, y: 100, width: width - 28, height: height - 116)
+        scrollView.frame = NSRect(x: 16, y: 59, width: width - 28, height: height - 75)
         guard let window = overlayWindow else {
             logger.log("layoutPanel missingWindow=true")
             return
@@ -1549,144 +1324,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.dateFormat = "d MMM HH:mm"
         return dateFormatter.string(from: resetDate)
-    }
-
-    private func updateCommandField() {
-        commandField.placeholderString = commandPlaceholder()
-        switch commandStatus {
-        case .idle:
-            commandField.textColor = NSColor.labelColor.withAlphaComponent(0.94)
-            commandUnderline.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.14).cgColor
-        case .working:
-            commandField.textColor = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.96)
-            commandUnderline.layer?.backgroundColor = NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.32).cgColor
-        case .success:
-            commandField.textColor = NSColor(calibratedRed: 0.45, green: 0.83, blue: 0.63, alpha: 0.96)
-            commandUnderline.layer?.backgroundColor = NSColor(calibratedRed: 0.45, green: 0.83, blue: 0.63, alpha: 0.3).cgColor
-        case .failure:
-            commandField.textColor = NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.96)
-            commandUnderline.layer?.backgroundColor = NSColor(calibratedRed: 0.96, green: 0.42, blue: 0.42, alpha: 0.3).cgColor
-        }
-        updateCommandGhost()
-    }
-
-    func controlTextDidChange(_ obj: Notification) {
-        guard (obj.object as? NSTextField) === commandField else {
-            return
-        }
-        commandStatus = .idle
-        applyCommandTextStyling()
-        updateCommandGhost()
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard control === commandField else {
-            return false
-        }
-        if commandSelector == #selector(NSResponder.insertTab(_:)) {
-            applyCommandCompletion(textView: textView)
-            return true
-        }
-        return false
-    }
-
-    private func applyCommandCompletion(textView: NSTextView) {
-        guard let completed = completedCommandText(for: commandField.stringValue) else {
-            return
-        }
-        commandField.stringValue = completed
-        textView.string = completed
-        textView.setSelectedRange(NSRange(location: completed.count, length: 0))
-        applyCommandTextStyling()
-        updateCommandGhost()
-    }
-
-    private func updateCommandGhost() {
-        let suggestion = commandSuggestion(for: commandField.stringValue)
-        commandGhostLabel.stringValue = suggestion?.suffix ?? ""
-        commandGhostLabel.isHidden = suggestion == nil
-        positionCommandGhost()
-    }
-
-    private func positionCommandGhost() {
-        let typedWidth = measuredCommandWidth(commandField.stringValue)
-        commandGhostLabel.frame = NSRect(
-            x: min(commandContainer.bounds.width - 8, typedWidth),
-            y: 0,
-            width: max(0, commandContainer.bounds.width - typedWidth),
-            height: 19
-        )
-    }
-
-    private func applyCommandTextStyling() {
-        guard let editor = overlayWindow?.fieldEditor(false, for: commandField) as? NSTextView,
-              editor.string == commandField.stringValue else {
-            return
-        }
-        let selectedRange = editor.selectedRange()
-        let fullRange = NSRange(location: 0, length: (editor.string as NSString).length)
-        editor.textStorage?.setAttributes([
-            .font: overlayFont(size: 12, weight: .medium),
-            .foregroundColor: NSColor.labelColor.withAlphaComponent(0.94)
-        ], range: fullRange)
-        if let commandRange = firstCommandRange(in: editor.string) {
-            editor.textStorage?.addAttribute(
-                .foregroundColor,
-                value: NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.98),
-                range: commandRange
-            )
-        }
-        editor.setSelectedRange(selectedRange)
-    }
-
-    private func firstCommandRange(in text: String) -> NSRange? {
-        guard text.hasPrefix("/") else {
-            return nil
-        }
-        let nsText = text as NSString
-        let end = text.firstIndex(where: { $0.isWhitespace }).map { text.distance(from: text.startIndex, to: $0) } ?? nsText.length
-        return NSRange(location: 0, length: end)
-    }
-
-    private func commandSuggestion(for text: String) -> (full: String, suffix: String)? {
-        let commands = ["/init", "/working-dir"]
-        let prefix = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard prefix.hasPrefix("/"), !prefix.contains(where: { $0.isWhitespace }) else {
-            return nil
-        }
-        guard let full = commands.first(where: { $0.hasPrefix(prefix) && $0 != prefix }) else {
-            return nil
-        }
-        return (full, String(full.dropFirst(prefix.count)))
-    }
-
-    private func completedCommandText(for text: String) -> String? {
-        guard let suggestion = commandSuggestion(for: text) else {
-            return nil
-        }
-        return suggestion.full + " "
-    }
-
-    private func measuredCommandWidth(_ text: String) -> CGFloat {
-        guard !text.isEmpty else {
-            return 0
-        }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: overlayFont(size: 12, weight: .medium)
-        ]
-        return ceil((text as NSString).size(withAttributes: attributes).width)
-    }
-
-    private func commandPlaceholder() -> String {
-        switch commandStatus {
-        case .idle:
-            if let workingDirectory = stateStore.commandWorkingDirectory() {
-                return "Command...  /init --project \(URL(fileURLWithPath: workingDirectory).lastPathComponent)"
-            }
-            return "Command...  /working-dir Developer"
-        case .working(let message), .success(let message), .failure(let message):
-            return message
-        }
     }
 
     private func currentScreenVisibleFrame() -> NSRect? {
@@ -1790,465 +1427,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
     }
 
-    @objc private func submitOverlayCommand(_ sender: NSTextField) {
-        let text = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            return
-        }
-        sender.stringValue = ""
-        handleOverlayCommand(text)
-    }
-
-    private func handleOverlayCommand(_ text: String) {
-        let tokens = tokenizeCommand(text)
-        guard let command = tokens.first else {
-            return
-        }
-
-        switch command {
-        case "/working-dir":
-            handleWorkingDirectoryCommand(tokens: Array(tokens.dropFirst()))
-        case "/init":
-            handleInitCommand(tokens: Array(tokens.dropFirst()))
-        default:
-            setCommandStatus(.failure("Unknown command: \(command)"))
-            NSSound.beep()
-        }
-    }
-
-    private func handleWorkingDirectoryCommand(tokens: [String]) {
-        guard tokens.count == 1 else {
-            setCommandStatus(.failure("Usage: /working-dir <path>"))
-            NSSound.beep()
-            return
-        }
-
-        let path = resolveUserPath(tokens[0], relativeTo: FileManager.default.homeDirectoryForCurrentUser.path)
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            setCommandStatus(.failure("Directory not found: \(displayPath(path))"))
-            NSSound.beep()
-            return
-        }
-
-        stateStore.setCommandWorkingDirectory(path)
-        setCommandStatus(.success("Working dir: \(displayPath(path))"))
-    }
-
-    private func handleInitCommand(tokens: [String]) {
-        let parsed = parseInitArguments(tokens)
-        switch parsed {
-        case .failure(let message):
-            setCommandStatus(.failure(message))
-            NSSound.beep()
-        case .success(let request):
-            launchInitRequest(request)
-        }
-    }
-
-    private func launchInitRequest(_ request: InitCommandRequest) {
-        let projectPath = request.projectPath
-        let projectName = URL(fileURLWithPath: projectPath).lastPathComponent
-        setCommandStatus(.working("Launching \(request.count) \(projectName) session\(request.count == 1 ? "" : "s")..."))
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = self?.runInitCommand(request) ?? .failure("Navex helper unavailable")
-            DispatchQueue.main.async {
-                guard let self else {
-                    return
-                }
-                switch result {
-                case .success(let message):
-                    self.setCommandStatus(.success(message))
-                case .failure(let message):
-                    self.setCommandStatus(.failure(message))
-                    NSSound.beep()
-                }
-            }
-        }
-    }
-
-    private func setCommandStatus(_ status: OverlayCommandStatus) {
-        commandStatus = status
-        updateCommandField()
-        layoutPanel()
-    }
-
-    private struct InitCommandRequest {
-        let projectPath: String
-        let count: Int
-        let profile: String?
-    }
-
-    private enum CommandParseResult<T> {
-        case success(T)
-        case failure(String)
-    }
-
-    private func parseInitArguments(_ tokens: [String]) -> CommandParseResult<InitCommandRequest> {
-        var project: String?
-        var explicitPath: String?
-        var count = 1
-        var profile: String?
-        var index = 0
-
-        while index < tokens.count {
-            let token = tokens[index]
-            switch token {
-            case "--":
-                index = tokens.count
-            case "--project":
-                guard index + 1 < tokens.count else {
-                    return .failure("Missing value for --project")
-                }
-                project = tokens[index + 1]
-                index += 2
-            case "--path":
-                guard index + 1 < tokens.count else {
-                    return .failure("Missing value for --path")
-                }
-                explicitPath = tokens[index + 1]
-                index += 2
-            case "-n", "--count":
-                guard index + 1 < tokens.count, let parsed = Int(tokens[index + 1]), (1...9).contains(parsed) else {
-                    return .failure("Expected -n between 1 and 9")
-                }
-                count = parsed
-                index += 2
-            case let shorthand where shorthand.range(of: #"^-[1-9]$"#, options: .regularExpression) != nil:
-                count = Int(String(shorthand.dropFirst())) ?? count
-                index += 1
-            case "--profile":
-                guard index + 1 < tokens.count else {
-                    return .failure("Missing value for --profile")
-                }
-                profile = tokens[index + 1]
-                index += 2
-            default:
-                return .failure("Unsupported /init option: \(token)")
-            }
-        }
-
-        let projectPath: String
-        if let explicitPath {
-            projectPath = resolveUserPath(explicitPath, relativeTo: stateStore.commandWorkingDirectory() ?? FileManager.default.homeDirectoryForCurrentUser.path)
-        } else if let project {
-            guard let base = stateStore.commandWorkingDirectory() else {
-                return .failure("Set /working-dir first")
-            }
-            projectPath = resolveProject(project, base: base)
-        } else {
-            guard let base = stateStore.commandWorkingDirectory() else {
-                return .failure("Set /working-dir first")
-            }
-            projectPath = base
-        }
-
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: projectPath, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return .failure("Project not found: \(displayPath(projectPath))")
-        }
-
-        return .success(InitCommandRequest(projectPath: projectPath, count: count, profile: profile))
-    }
-
-    private func resolveProject(_ project: String, base: String) -> String {
-        if project.contains("/") || project.hasPrefix("~") {
-            return resolveUserPath(project, relativeTo: base)
-        }
-        return URL(fileURLWithPath: base).appendingPathComponent(project).standardizedFileURL.path
-    }
-
-    private func resolveUserPath(_ raw: String, relativeTo base: String) -> String {
-        let expanded: String
-        if raw == "~" {
-            expanded = FileManager.default.homeDirectoryForCurrentUser.path
-        } else if raw.hasPrefix("~/") {
-            expanded = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(String(raw.dropFirst(2))).path
-        } else if raw.hasPrefix("/") {
-            expanded = raw
-        } else {
-            expanded = URL(fileURLWithPath: base).appendingPathComponent(raw).path
-        }
-        return URL(fileURLWithPath: expanded).standardizedFileURL.path
-    }
-
-    private func displayPath(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if path == home {
-            return "~"
-        }
-        if path.hasPrefix(home + "/") {
-            return "~/" + String(path.dropFirst(home.count + 1))
-        }
-        return path
-    }
-
-    private func tokenizeCommand(_ text: String) -> [String] {
-        var tokens: [String] = []
-        var current = ""
-        var quote: Character?
-        var escaping = false
-
-        for character in text {
-            if escaping {
-                current.append(character)
-                escaping = false
-                continue
-            }
-
-            if character == "\\" {
-                escaping = true
-                continue
-            }
-
-            if let activeQuote = quote {
-                if character == activeQuote {
-                    quote = nil
-                } else {
-                    current.append(character)
-                }
-                continue
-            }
-
-            if character == "\"" || character == "'" {
-                quote = character
-                continue
-            }
-
-            if character.isWhitespace {
-                if !current.isEmpty {
-                    tokens.append(current)
-                    current = ""
-                }
-                continue
-            }
-
-            current.append(character)
-        }
-
-        if !current.isEmpty {
-            tokens.append(current)
-        }
-        return tokens
-    }
-
-    private func runInitCommand(_ request: InitCommandRequest) -> CommandParseResult<String> {
-        guard let launchCommand = navexLaunchShellCommand(projectPath: request.projectPath) else {
-            return .failure("Cannot locate navex CLI")
-        }
-
-        logger.log("initCommand project=\(request.projectPath) count=\(request.count) profile=\(request.profile ?? "")")
-        let launchResult = runAppleScript(initLaunchITermScript())
-        guard launchResult.terminationStatus == 0 else {
-            logger.log("initCommand launchFailed error=\(launchResult.message)")
-            return .failure("Unable to launch iTerm: \(launchResult.message)")
-        }
-
-        guard waitForITermReady() else {
-            logger.log("initCommand readyTimeout")
-            return .failure("Timed out waiting for iTerm to become scriptable")
-        }
-
-        let frames = tiledFrames(count: request.count)
-        for index in 0..<request.count {
-            switch createITermCodexWindow(request: request, launchCommand: launchCommand, index: index) {
-            case .failure(let message):
-                logger.log("initCommand createFailed index=\(index) error=\(message)")
-                return .failure(message)
-            case .success(let windowId):
-                if index < frames.count {
-                    tileITermWindow(frame: frames[index], windowId: windowId)
-                }
-            }
-        }
-
-        let name = URL(fileURLWithPath: request.projectPath).lastPathComponent
-        return .success("Launched \(request.count) \(name) session\(request.count == 1 ? "" : "s")")
-    }
-
-    private struct AppleScriptRunResult {
-        let terminationStatus: Int32
-        let output: String
-        let error: String
-
-        var message: String {
-            let trimmedError = error.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedError.isEmpty {
-                return trimmedError
-            }
-            let trimmedOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedOutput.isEmpty {
-                return trimmedOutput
-            }
-            return "osascript exited with status \(terminationStatus)"
-        }
-    }
-
-    private func runAppleScript(_ script: String) -> AppleScriptRunResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            return AppleScriptRunResult(terminationStatus: process.terminationStatus, output: output, error: error)
-        } catch {
-            return AppleScriptRunResult(terminationStatus: 1, output: "", error: error.localizedDescription)
-        }
-    }
-
-    private func initLaunchITermScript() -> String {
-        """
-        tell application id "com.googlecode.iterm2"
-          launch
-          activate
-        end tell
-        """
-    }
-
-    private func waitForITermReady() -> Bool {
-        for _ in 0..<40 {
-            let result = runAppleScript("""
-            tell application id "com.googlecode.iterm2"
-              activate
-              return version
-            end tell
-            """)
-            if result.terminationStatus == 0 {
-                return true
-            }
-            Thread.sleep(forTimeInterval: 0.25)
-        }
-        return false
-    }
-
-    private func createITermCodexWindow(request: InitCommandRequest, launchCommand: String, index: Int) -> CommandParseResult<String> {
-        let createCommand = request.profile
-            .map { "create window with profile \(appleScriptString($0))" }
-            ?? "create window with default profile"
-        let script = """
-        tell application id "com.googlecode.iterm2"
-          activate
-          \(createCommand)
-          delay 0.2
-          tell current session of current window to write text \(appleScriptString(launchCommand))
-          return id of current window as string
-        end tell
-        """
-
-        var lastMessage = "iTerm window creation failed"
-        for attempt in 1...12 {
-            let result = runAppleScript(script)
-            if result.terminationStatus == 0 {
-                let windowId = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                return .success(windowId)
-            }
-            lastMessage = result.message
-            logger.log("initCommand createRetry index=\(index) attempt=\(attempt) error=\(lastMessage)")
-            Thread.sleep(forTimeInterval: 0.25)
-        }
-        return .failure("Unable to create iTerm window: \(lastMessage)")
-    }
-
-    private func tileITermWindow(frame: AppleScriptFrame, windowId: String) {
-        let script = """
-        try
-          tell application "System Events"
-            set targetProcess to missing value
-            if exists process "iTerm2" then
-              set targetProcess to process "iTerm2"
-            else if exists process "iTerm" then
-              set targetProcess to process "iTerm"
-            end if
-            if targetProcess is not missing value then
-              tell targetProcess
-                set frontmost to true
-                set targetWindow to front window
-                set position of targetWindow to {\(frame.left), \(frame.top)}
-                set size of targetWindow to {\(frame.width), \(frame.height)}
-              end tell
-            end if
-          end tell
-        end try
-        """
-        let result = runAppleScript(script)
-        if result.terminationStatus != 0 {
-            logger.log("initCommand tileSkipped windowId=\(windowId) error=\(result.message)")
-        }
-    }
-
-    private func navexLaunchShellCommand(projectPath: String) -> String? {
-        let command: String
-        if let node = envValue("NAVEX_NODE_PATH"), let cli = envValue("NAVEX_CLI_PATH") {
-            command = "\(shellQuote(node)) \(shellQuote(cli)) launch"
-        } else if let sampleCommand = items.values.first?.focusCommand,
-                  let cliPath = sampleCommand.args.first {
-            command = "\(shellQuote(sampleCommand.executable)) \(shellQuote(cliPath)) launch"
-        } else if let navex = envValue("NAVEX_BIN") {
-            command = "\(shellQuote(navex)) launch"
-        } else {
-            command = "navex launch"
-        }
-        return "cd \(shellQuote(projectPath)) && \(command)"
-    }
-
-    private struct AppleScriptFrame {
-        let left: Int
-        let top: Int
-        let width: Int
-        let height: Int
-    }
-
-    private func tiledFrames(count: Int) -> [AppleScriptFrame] {
-        guard let geometry = currentScreenGeometry() else {
-            return []
-        }
-        let frame = geometry.visibleFrame
-
-        let columns = count <= 1 ? 1 : count <= 2 ? count : count <= 4 ? 2 : 3
-        let rows = Int(ceil(Double(count) / Double(columns)))
-        let cellWidth = frame.width / CGFloat(columns)
-        let cellHeight = frame.height / CGFloat(rows)
-
-        return (0..<count).map { index in
-            let row = index / columns
-            let column = index % columns
-            let rect = NSRect(
-                x: frame.minX + CGFloat(column) * cellWidth,
-                y: frame.maxY - CGFloat(row + 1) * cellHeight,
-                width: cellWidth,
-                height: cellHeight
-            )
-            let top = Int((geometry.screenFrame.maxY - rect.maxY).rounded())
-            let bottom = Int((geometry.screenFrame.maxY - rect.minY).rounded())
-            return AppleScriptFrame(
-                left: Int(rect.minX.rounded()),
-                top: top,
-                width: Int(rect.width.rounded()),
-                height: bottom - top
-            )
-        }
-    }
-
-    private func appleScriptString(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
-    }
-
-    private func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-
     private func removeSession(sessionId: String) {
         guard let item = items[sessionId], let removeCommand = item.removeCommand else {
             NSSound.beep()
@@ -2257,7 +1435,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         items.removeValue(forKey: sessionId)
         stateStore.remove(sessionId: sessionId)
-        repromptStates.removeValue(forKey: sessionId)
         refresh()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -2271,50 +1448,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                     self.loadSnapshotIfNeeded(reason: "remove-failed", allowSameRaw: true)
                     NSSound.beep()
                 }
-            }
-        }
-    }
-
-    private func repromptSession(sessionId: String, text: String) {
-        guard let item = items[sessionId], let repromptCommand = item.repromptCommand else {
-            NSSound.beep()
-            return
-        }
-
-        let token = UUID().uuidString
-        repromptStates[sessionId] = .submitting(token: token)
-        refresh()
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + RepromptMetrics.confirmationTimeout) { [weak self] in
-            guard let self else {
-                return
-            }
-            guard case .submitting(let currentToken) = self.repromptStates[sessionId], currentToken == token else {
-                return
-            }
-            if self.items[sessionId]?.status == .active {
-                self.repromptStates.removeValue(forKey: sessionId)
-            } else {
-                self.repromptStates[sessionId] = .unconfirmed
-            }
-            self.refresh()
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let success = self?.launch(repromptCommand, extraArgs: [text], waitForExit: true) ?? false
-            DispatchQueue.main.async {
-                guard let self else {
-                    return
-                }
-                if success {
-                    return
-                }
-                guard case .submitting(let currentToken) = self.repromptStates[sessionId], currentToken == token else {
-                    return
-                }
-                self.repromptStates[sessionId] = .unconfirmed
-                self.refresh()
-                NSSound.beep()
             }
         }
     }
@@ -2348,12 +1481,12 @@ final class OverlayApp: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     @discardableResult
-    private func launch(_ command: CommandSpec, extraArgs: [String] = [], waitForExit: Bool = false) -> Bool {
+    private func launch(_ command: CommandSpec, waitForExit: Bool = false) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: command.executable)
-        process.arguments = command.args + extraArgs
+        process.arguments = command.args
         do {
-            logger.log("launch command=\(command.executable) args=\((command.args + extraArgs).joined(separator: " ")) wait=\(waitForExit)")
+            logger.log("launch command=\(command.executable) args=\(command.args.joined(separator: " ")) wait=\(waitForExit)")
             try process.run()
             if waitForExit {
                 process.waitUntilExit()

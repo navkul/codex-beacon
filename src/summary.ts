@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { AppConfig, SummaryResult, SummaryState, SummaryStyle } from './types.js';
 
-const DEFAULT_SUMMARY = 'Ready for your next prompt.';
+const DEFAULT_SUMMARY = 'Finished. Open the session when you are ready to continue.';
 const GENERIC_SENTENCE = /^(done|fixed|implemented|updated|ready|okay|ok|complete)\.?$/i;
 const STATE_ONLY_SENTENCE = /^(done|blocked|failed|needs input|ready)[:\s\-–.]*$/i;
 const ACTION_PATTERN = /\b(fixed|implemented|added|updated|wired|built|refactored|changed|completed|resolved|summarized)\b/i;

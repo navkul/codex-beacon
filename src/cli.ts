@@ -19,7 +19,6 @@ import {
 import { sendOverlayControl } from './overlay-control.js';
 import { replaceOverlaySnapshot, runOverlayHelperForeground } from './notify.js';
 import { installOverlayLoginItem, uninstallOverlayLoginItem } from './overlay-login.js';
-import { repromptSession } from './reprompt.js';
 import { listSessions, removeSession } from './session-registry.js';
 
 const program = new Command();
@@ -58,15 +57,6 @@ program
   .requiredOption('--session-id <sessionId>')
   .action((options: { sessionId: string }) => {
     focusSession(options.sessionId);
-  });
-
-program
-  .command('reprompt')
-  .description('Send and submit a prompt to a tracked session')
-  .requiredOption('--session-id <sessionId>')
-  .requiredOption('--message <message>')
-  .action(async (options: { sessionId: string; message: string }) => {
-    await repromptSession(options.sessionId, options.message);
   });
 
 const overlayCommand = program

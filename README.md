@@ -16,18 +16,17 @@ Current scope:
 
 - tracks interactive Codex sessions launched through the wrapper
 - stable session names, plus custom names with `codex -N <name>`
-- native menu-bar overlay for waiting sessions
+- native menu-bar overlay for working and finished agents
 - explicit `navex overlay show|hide|toggle` control for the floating overlay
 - global overlay hotkey, defaulting to `cmd+option+k`
 - compact transcript-tail summaries
 - focuses the originating terminal session from the overlay
-- clears the waiting item on the next prompt submit
+- updates finished agents back to working when you submit the next prompt
 - persisted local state across daemon/helper restarts
-- drag-to-reorder waiting sessions
-- inline reprompt for Terminal.app and iTerm2
+- drag-to-reorder tracked agents
+- completion alerts that bring the overlay forward
 - overlay header usage summary
 - config for app label, width, and summary behavior
-- tracked `navex fork --session-id <id>` for one-session terminal windows
 
 Terminal support is centered on:
 
@@ -86,7 +85,7 @@ Start one with a custom name:
 codex -N api-migration
 ```
 
-When Codex stops, Navex shows the waiting session in the overlay. You can focus it, reorder it, or reprompt inline when the terminal supports it. Inline reprompts show `Submitting.` immediately, switch to `Working.` after Codex accepts the prompt, and show `Reprompt not confirmed` if the session never starts. When you send the next prompt in that session, the waiting item clears automatically.
+Navex tracks each agent as it works. When an agent finishes, Navex brings the overlay forward with its transcript summary. Use the open button to return to the originating terminal, then continue or reprompt the agent there. Navex does not accept commands or submit prompts from the overlay.
 
 ## Commands
 
@@ -109,25 +108,6 @@ Keep the helper running after macOS login so the global hotkey works before any 
 ```bash
 navex overlay install-login
 ```
-
-Overlay command line:
-
-```text
-/working-dir Developer
-/init
-/init -2
-/init --project navex -6 --profile god
-```
-
-`/working-dir` is saved in `~/.navex/overlay-state.json` and reused by future overlay commands. `/init` launches from the saved working directory, `/init --project navex` resolves to the saved working directory plus `navex`, and `/init --path ~/Developer/navex` bypasses the saved base directory. `/init` forwards Codex arguments such as `--profile god` to `navex launch`; iTerm windows use the default iTerm profile.
-
-Fork a tracked session into a new split-screen terminal window:
-
-```bash
-navex fork --session-id <session-id>
-```
-
-The fork command requires one tracked Codex session in one Terminal.app or iTerm2 window. It fails closed for ambiguous windows with multiple tabs, split panes, or duplicate tracked sessions. If Codex exposes submitted slash-command text in hook payloads, typing `/fork` in the Codex composer triggers the same coordinator.
 
 Show config:
 

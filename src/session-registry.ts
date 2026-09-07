@@ -78,7 +78,7 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
     lastSummary: existing?.lastSummary,
     lastSummaryState: existing?.lastSummaryState,
     lastUsage: existing?.lastUsage,
-    status: event.type === 'session-stop' ? 'waiting' : 'active',
+    status: event.type === 'session-stop' ? 'done' : 'active',
     cloudTask: existing?.cloudTask
   };
   registry.sessions[event.sessionId] = session;
@@ -217,6 +217,10 @@ function normalizeRegistry(registry: RegistryFile): void {
   for (const session of Object.values(registry.sessions)) {
     session.kind ??= 'local-interactive';
     session.isCustomName ??= !DEFAULT_NAME_PATTERN.test(session.displayName);
+    // "waiting" was the old reprompt-oriented name for a finished local turn.
+    if (session.kind === 'local-interactive' && session.status === 'waiting') {
+      session.status = 'done';
+    }
   }
 
   const defaultSessions = Object.values(registry.sessions)
