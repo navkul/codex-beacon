@@ -33,13 +33,21 @@ export function focusSession(sessionId: string): void {
     return;
   }
 
+  if (session.surface === 'desktop' || session.surface === 'unknown') {
+    focusDesktopThread(session.sessionId);
+    return;
+  }
+
   const terminal = (session.terminalApp ?? '').toLowerCase();
   if (terminal.includes('iterm')) {
     if (focusITermSession(session)) {
       raiseITerm();
       return;
     }
-    throw new Error(`Unable to locate the original iTerm session for ${session.displayName}`);
+    if (activateBundle('com.googlecode.iterm2')) {
+      return;
+    }
+    throw new Error(`Unable to open iTerm for ${session.displayName}`);
   }
 
   if (terminal.includes('vscode') || terminal.includes('visual studio code')) {
@@ -56,7 +64,10 @@ export function focusSession(sessionId: string): void {
     if (focusTerminalSession(session)) {
       return;
     }
-    throw new Error(`Unable to locate the original Terminal.app window for ${session.displayName}`);
+    if (activateBundle('com.apple.Terminal')) {
+      return;
+    }
+    throw new Error(`Unable to open Terminal.app for ${session.displayName}`);
   }
 
   if (focusITermSession(session)) {
@@ -69,7 +80,9 @@ export function focusSession(sessionId: string): void {
   }
 
   if (!terminal && (session.terminalSessionUniqueId || session.terminalTty || session.terminalWindowId)) {
-    throw new Error(`Unable to locate a live terminal target for session: ${sessionId}`);
+    if (activateBundle('com.googlecode.iterm2') || activateBundle('com.apple.Terminal')) {
+      return;
+    }
   }
 
   if (focusVSCodeIfRunning() || focusCursorIfRunning()) {
@@ -77,6 +90,19 @@ export function focusSession(sessionId: string): void {
   }
 
   throw new Error(`Unable to locate a live terminal target for session: ${sessionId}`);
+}
+
+function focusDesktopThread(sessionId: string): void {
+  const url = `codex://threads/${encodeURIComponent(sessionId)}`;
+  try {
+    execFileSync('open', [url], { stdio: 'ignore' });
+    return;
+  } catch {
+    if (activateBundle('com.openai.codex')) {
+      return;
+    }
+  }
+  throw new Error(`Unable to open Codex Desktop for session: ${sessionId}`);
 }
 
 function focusCloudTask(session: NonNullable<ReturnType<typeof getSession>>): void {

@@ -1,10 +1,11 @@
 import { ChildProcess, execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadConfig, overlayControlPath, overlayHelperLogPath, overlaySnapshotPath, overlayStatePath } from './config.js';
 import { listSessions } from './session-registry.js';
-import { SessionKind, SessionRecord, SessionStatus, SessionUsageSnapshot, SummaryState } from './types.js';
+import { NavigationPrecision, SessionKind, SessionRecord, SessionStatus, SessionSurface, SessionUsageSnapshot, SummaryState } from './types.js';
 
 interface OverlayCommand {
   executable: string;
@@ -17,6 +18,8 @@ interface OverlayEvent {
   displayName?: string;
   summary?: string;
   kind?: SessionKind;
+  surface?: SessionSurface;
+  navigationPrecision?: NavigationPrecision;
   sourceLabel?: string;
   status?: SessionStatus;
   cloudStatus?: string;
@@ -55,6 +58,11 @@ function truncate(text: string, limit: number): string {
 export function sendSessionCompletionAlert(session: SessionRecord): void {
   const event = overlayShowEvent(session);
   updateOverlaySnapshot(event);
+  writeFileSync(overlayControlPath(), JSON.stringify({
+    action: 'show',
+    commandId: randomUUID(),
+    requestedAt: new Date().toISOString()
+  }, null, 2));
   ensureOverlayHelper(true);
 }
 
@@ -74,8 +82,10 @@ function overlayShowEvent(session: SessionRecord, presentation = currentPresenta
     sessionId: session.sessionId,
     displayName: session.displayName,
     summary: message,
-    kind: session.kind ?? 'local-interactive',
-    sourceLabel: session.kind === 'cloud-task' ? 'Cloud' : undefined,
+    kind: session.kind ?? 'codex-thread',
+    surface: session.surface ?? 'unknown',
+    navigationPrecision: session.navigationPrecision ?? 'application-only',
+    sourceLabel: sourceLabel(session),
     status: session.status,
     cloudStatus: session.cloudTask?.cloudStatus,
     cloudDetail: cloudOverlayDetail(session),
@@ -183,6 +193,22 @@ function overlaySummary(session: SessionRecord): string {
     ? cloudOverlaySummary(session)
     : 'Finished. Open the session when you are ready to continue.';
   return truncate(session.lastSummary ?? fallback, config.overlaySummaryMaxChars);
+}
+
+function sourceLabel(session: SessionRecord): string {
+  switch (session.surface) {
+    case 'desktop':
+      return 'Desktop';
+    case 'cli':
+      return 'CLI';
+    case 'vscode':
+      return 'Editor';
+    case 'cloud':
+      return 'Cloud';
+    case 'unknown':
+    default:
+      return session.kind === 'cloud-task' ? 'Cloud' : 'Codex';
+  }
 }
 
 function cloudOverlaySummary(session: SessionRecord): string {
