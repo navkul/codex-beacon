@@ -54,9 +54,6 @@ struct OverlayEvent: Decodable {
     let displayName: String?
     let summary: String?
     let kind: String?
-    let surface: String?
-    let navigationPrecision: String?
-    let sourceLabel: String?
     let status: SessionStatus?
     let cloudStatus: String?
     let cloudDetail: String?
@@ -73,9 +70,6 @@ struct OverlayItem {
     let displayName: String
     let summary: String
     let kind: String
-    let surface: String
-    let navigationPrecision: String
-    let sourceLabel: String?
     let status: SessionStatus
     let cloudStatus: String?
     let cloudDetail: String?
@@ -541,17 +535,6 @@ final class OverlayRowView: NSView {
         let title = label(item.displayName, size: 13, color: NSColor.labelColor.withAlphaComponent(0.95), weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
 
-        let sourceIcon = NSImageView()
-        sourceIcon.translatesAutoresizingMaskIntoConstraints = false
-        sourceIcon.image = NSImage(
-            systemSymbolName: sourceIconName(item),
-            accessibilityDescription: item.sourceLabel ?? "Local"
-        )?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
-        sourceIcon.contentTintColor = item.kind == "cloud-task"
-            ? NSColor(calibratedRed: 0.53, green: 0.75, blue: 0.98, alpha: 0.95)
-            : NSColor.secondaryLabelColor.withAlphaComponent(0.82)
-        sourceIcon.symbolConfiguration = .init(pointSize: 12, weight: .medium)
-
         let actionTint = NSColor.tertiaryLabelColor.withAlphaComponent(0.88)
 
         let openButton = subtleIconButton(
@@ -585,7 +568,6 @@ final class OverlayRowView: NSView {
         titleRow.translatesAutoresizingMaskIntoConstraints = false
         titleRow.setContentCompressionResistancePriority(.required, for: .vertical)
         titleRow.setContentHuggingPriority(.required, for: .vertical)
-        titleRow.addArrangedSubview(sourceIcon)
         titleRow.addArrangedSubview(title)
         titleRow.addArrangedSubview(dot)
 
@@ -621,8 +603,6 @@ final class OverlayRowView: NSView {
             widthAnchor.constraint(equalToConstant: CGFloat(presentation.width) - 32),
             dot.widthAnchor.constraint(equalToConstant: Metrics.dotSize),
             dot.heightAnchor.constraint(equalToConstant: Metrics.dotSize),
-            sourceIcon.widthAnchor.constraint(equalToConstant: 14),
-            sourceIcon.heightAnchor.constraint(equalToConstant: 14),
             title.widthAnchor.constraint(lessThanOrEqualTo: contentColumn.widthAnchor),
             summary.widthAnchor.constraint(equalTo: contentColumn.widthAnchor),
             summary.heightAnchor.constraint(greaterThanOrEqualToConstant: Metrics.summaryMinHeight),
@@ -753,21 +733,6 @@ final class OverlayRowView: NSView {
         }
     }
 
-    private func sourceIconName(_ item: OverlayItem) -> String {
-        switch item.surface {
-        case "desktop":
-            return "macwindow"
-        case "vscode":
-            return "chevron.left.forwardslash.chevron.right"
-        case "cloud":
-            return "cloud"
-        case "cli":
-            return "terminal"
-        default:
-            return item.kind == "cloud-task" ? "cloud" : "circle.dashed"
-        }
-    }
-
 }
 
 final class OverlayApp: NSObject, NSApplicationDelegate {
@@ -783,7 +748,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let rootView = FlippedView(frame: NSRect(x: 0, y: 0, width: 384, height: 180))
     private let backgroundView = FlippedView()
     private let headerTitle = NSTextField(labelWithString: "Navex")
-    private let headerSubtitle = NSTextField(labelWithString: "No tracked agents")
+    private let headerSubtitle = NSTextField(labelWithString: "0 agents working")
     private let headerUsagePrimary = NSTextField(labelWithString: "")
     private let headerUsageSecondary = NSTextField(labelWithString: "")
     private let scrollView = NSScrollView()
@@ -796,6 +761,7 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private let controlURL = OverlayApp.overlayControlURL()
     private var lastSnapshotRaw = ""
     private var snapshotTimer: Timer?
+    private var workingAnimationStep = 0
     private var controlTimer: Timer?
     private let showOnLaunch = envValue("NAVEX_OVERLAY_SHOW_ON_LAUNCH") == "1"
     private var visibleRowsContentHeight: CGFloat = 1
@@ -967,8 +933,17 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     private func startSnapshotPolling() {
         snapshotTimer?.invalidate()
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
-            self?.loadSnapshotIfNeeded(reason: "poll", allowSameRaw: false)
+            guard let self else {
+                return
+            }
+            self.advanceWorkingAnimation()
+            self.loadSnapshotIfNeeded(reason: "poll", allowSameRaw: false)
         }
+    }
+
+    private func advanceWorkingAnimation() {
+        workingAnimationStep = (workingAnimationStep + 1) % 4
+        headerSubtitle.stringValue = headerSubtitleText()
     }
 
     private func startControlPolling() {
@@ -1067,9 +1042,6 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 displayName: event.displayName ?? "Codex",
                 summary: event.summary ?? "Finished. Open the session when you are ready to continue.",
                 kind: event.kind ?? "codex-thread",
-                surface: event.surface ?? "unknown",
-                navigationPrecision: event.navigationPrecision ?? "application-only",
-                sourceLabel: event.sourceLabel,
                 status: event.status ?? .done,
                 cloudStatus: event.cloudStatus,
                 cloudDetail: event.cloudDetail,
@@ -1211,33 +1183,14 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
     }
 
     private func headerSubtitleText() -> String {
-        guard !items.isEmpty else {
-            return "No tracked agents"
+        let activeCount = items.values.filter { $0.status == .active }.count
+        guard activeCount > 0 else {
+            return "0 agents working"
         }
 
-        let cloudCount = items.values.filter { $0.kind == "cloud-task" }.count
-        let doneCount = items.values.filter { $0.kind != "cloud-task" && ($0.status == .done || $0.status == .waiting) }.count
-        let activeCount = items.values.filter { $0.kind != "cloud-task" && $0.status == .active }.count
-        if cloudCount > 0 && doneCount == 0 && activeCount == 0 {
-            return "\(cloudCount) cloud"
-        }
-        if doneCount == 0 && cloudCount == 0 {
-            return "\(activeCount) live"
-        }
-        if activeCount == 0 && cloudCount == 0 {
-            return "\(doneCount) done"
-        }
-        var parts: [String] = []
-        if activeCount > 0 {
-            parts.append("\(activeCount) live")
-        }
-        if doneCount > 0 {
-            parts.append("\(doneCount) done")
-        }
-        if cloudCount > 0 {
-            parts.append("\(cloudCount) cloud")
-        }
-        return parts.joined(separator: " · ")
+        let noun = activeCount == 1 ? "agent" : "agents"
+        let suffix = [".", "..", "...", ".."][workingAnimationStep]
+        return "\(activeCount) \(noun) working\(suffix)"
     }
 
     private func layoutPanel() {
