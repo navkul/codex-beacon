@@ -1,5 +1,7 @@
-export type SessionStatus = 'active' | 'done' | 'failed' | 'waiting';
-export type SessionKind = 'local-interactive' | 'cloud-task';
+export type SessionStatus = 'active' | 'done' | 'failed' | 'interrupted' | 'waiting';
+export type SessionKind = 'codex-thread' | 'cloud-task';
+export type SessionSurface = 'desktop' | 'cli' | 'vscode' | 'cloud' | 'unknown';
+export type NavigationPrecision = 'exact-thread' | 'exact-window' | 'application-only';
 export type SummaryState = 'ready' | 'done' | 'blocked' | 'failed' | 'needs-input';
 export type SummaryStyle = 'smart' | 'raw';
 
@@ -22,6 +24,10 @@ export interface SessionUsageSnapshot {
 export interface SessionRecord {
   sessionId: string;
   kind?: SessionKind;
+  surface?: SessionSurface;
+  navigationPrecision?: NavigationPrecision;
+  turnId?: string;
+  lastCompletedTurnId?: string;
   displayName: string;
   isCustomName?: boolean;
   cwd: string;
@@ -31,7 +37,6 @@ export interface SessionRecord {
   terminalTabIndex?: number;
   terminalSessionUniqueId?: string;
   terminalTty?: string;
-  transcriptPath?: string | null;
   createdAt: string;
   updatedAt: string;
   lastSummary?: string;
@@ -67,14 +72,24 @@ export interface HookPayload {
   cwd: string;
   hook_event_name: string;
   model?: string;
+  turn_id?: string;
+  prompt?: string;
+  source?: string;
+  reason?: string;
+  permission_mode?: string;
+  stop_hook_active?: boolean;
+  last_assistant_message?: string | null;
 }
 
 export interface DaemonEvent {
-  type: 'session-stop' | 'session-active' | 'register-session' | 'session-exit';
+  type: 'session-stop' | 'session-active' | 'session-interrupt' | 'session-end' | 'register-session' | 'session-exit';
   sessionId?: string;
+  turnId?: string;
   cwd?: string;
-  transcriptPath?: string | null;
   displayName?: string;
+  surface?: SessionSurface;
+  navigationPrecision?: NavigationPrecision;
+  lastAssistantMessage?: string | null;
   launcherPid?: number;
   terminalApp?: string;
   terminalWindowId?: string;

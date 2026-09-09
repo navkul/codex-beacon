@@ -2,6 +2,8 @@
 import { Command } from 'commander';
 import { runDaemon } from './daemon.js';
 import { focusSession } from './focus.js';
+import { runInterruptHook } from './hook-interrupt.js';
+import { runSessionEndHook } from './hook-session-end.js';
 import { runSessionStartHook } from './hook-session-start.js';
 import { runStopHook } from './hook-stop.js';
 import { runUserPromptSubmitHook } from './hook-user-prompt-submit.js';
@@ -46,6 +48,14 @@ program
     }
     if (event === 'user-prompt-submit') {
       await runUserPromptSubmitHook();
+      return;
+    }
+    if (event === 'interrupt') {
+      await runInterruptHook();
+      return;
+    }
+    if (event === 'session-end') {
+      await runSessionEndHook();
       return;
     }
     throw new Error(`Unsupported hook event: ${event}`);
@@ -110,7 +120,7 @@ overlayCommand
 
 program
   .command('launch')
-  .description('Launch codex through the navex wrapper')
+  .description('Launch Codex with optional terminal-focus metadata (not required for tracking)')
   .allowUnknownOption(true)
   .option('-N, --session-name <name>', 'custom session name')
   .argument('[args...]')
@@ -133,7 +143,7 @@ const sessionsCommand = program
 sessionsCommand
   .action(() => {
     for (const session of listSessions()) {
-      const source = session.kind === 'cloud-task' ? 'cloud' : 'local';
+      const source = session.surface ?? (session.kind === 'cloud-task' ? 'cloud' : 'unknown');
       process.stdout.write(`${session.displayName}\t${source}\t${session.status}\t${session.cwd}\n`);
     }
   });
