@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { registryPath } from './config.js';
-import { CloudTaskSession, DaemonEvent, RegistryFile, SessionRecord, SessionUsageSnapshot, SummaryState } from './types.js';
+import { CloudTaskSession, DaemonEvent, NavigationPrecision, RegistryFile, SessionRecord, SessionSurface, SessionUsageSnapshot, SummaryState } from './types.js';
 
 const DEFAULT_NAME_PATTERN = /^codex \d+$/;
 
@@ -31,7 +31,10 @@ export function loadRegistry(): RegistryFile {
 }
 
 export function saveRegistry(registry: RegistryFile): void {
-  writeFileSync(registryPath(), JSON.stringify(registry, null, 2));
+  const file = registryPath();
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify(registry, null, 2));
+  renameSync(temporary, file);
 }
 
 export function allocateDisplayName(registry: RegistryFile, preferred?: string, sessionId?: string): string {
@@ -58,11 +61,18 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
 
   const registry = loadRegistry();
   const existing = registry.sessions[event.sessionId];
+  const eventIsStale = existing !== undefined && event.timestamp < existing.updatedAt;
   const createdAt = existing?.createdAt ?? event.timestamp ?? nowIso();
   const isCustomName = existing?.isCustomName ?? isRequestedCustomName(event.displayName, existing);
   const session: SessionRecord = {
     sessionId: event.sessionId,
-    kind: existing?.kind ?? 'local-interactive',
+    kind: existing?.kind === 'cloud-task' ? 'cloud-task' : 'codex-thread',
+    surface: event.surface ?? existing?.surface ?? inferSurface(existing),
+    navigationPrecision: event.navigationPrecision ?? existing?.navigationPrecision ?? inferNavigationPrecision(existing),
+    turnId: eventIsStale ? existing?.turnId : event.turnId ?? existing?.turnId,
+    lastCompletedTurnId: !eventIsStale && event.type === 'session-stop'
+      ? event.turnId ?? existing?.lastCompletedTurnId
+      : existing?.lastCompletedTurnId,
     displayName: existing?.displayName ?? allocateDisplayName(registry, event.displayName, event.sessionId),
     isCustomName,
     cwd: event.cwd ?? existing?.cwd ?? process.cwd(),
@@ -72,13 +82,12 @@ export function upsertFromEvent(event: DaemonEvent): SessionRecord {
     terminalTabIndex: event.terminalTabIndex ?? existing?.terminalTabIndex,
     terminalSessionUniqueId: event.terminalSessionUniqueId ?? existing?.terminalSessionUniqueId,
     terminalTty: event.terminalTty ?? existing?.terminalTty,
-    transcriptPath: event.transcriptPath ?? existing?.transcriptPath,
     createdAt,
-    updatedAt: event.timestamp ?? nowIso(),
+    updatedAt: eventIsStale ? existing.updatedAt : event.timestamp ?? nowIso(),
     lastSummary: existing?.lastSummary,
     lastSummaryState: existing?.lastSummaryState,
     lastUsage: existing?.lastUsage,
-    status: event.type === 'session-stop' ? 'done' : 'active',
+    status: eventIsStale ? existing.status : statusForEvent(event, existing),
     cloudTask: existing?.cloudTask
   };
   registry.sessions[event.sessionId] = session;
@@ -124,7 +133,7 @@ export function removeSession(sessionId: string): boolean {
 
 export function listSessions(): SessionRecord[] {
   const registry = loadRegistry();
-  pruneStaleLocalSessions(registry);
+  normalizeRegistry(registry);
   saveRegistry(registry);
   return Object.values(registry.sessions).sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { numeric: true }));
 }
@@ -137,6 +146,8 @@ export function upsertCloudTask(task: CloudTaskSession, summary?: string): Sessi
   const session: SessionRecord = {
     sessionId,
     kind: 'cloud-task',
+    surface: 'cloud',
+    navigationPrecision: task.url ? 'exact-thread' : 'application-only',
     displayName: cloudDisplayName(task),
     isCustomName: true,
     cwd: existing?.cwd ?? process.cwd(),
@@ -174,57 +185,51 @@ export function cloudSessionId(taskId: string): string {
   return `cloud:${taskId}`;
 }
 
-export function removeSessionsByLauncherPid(launcherPid: number): string[] {
+export function markSessionsByLauncherPidDone(launcherPid: number): SessionRecord[] {
   const registry = loadRegistry();
-  const removedSessionIds = Object.values(registry.sessions)
-    .filter((session) => session.launcherPid === launcherPid)
-    .map((session) => session.sessionId);
+  const sessions = Object.values(registry.sessions).filter((session) => session.launcherPid === launcherPid);
 
-  if (removedSessionIds.length === 0) {
-    return removedSessionIds;
+  if (sessions.length === 0) {
+    return sessions;
   }
 
-  for (const sessionId of removedSessionIds) {
-    delete registry.sessions[sessionId];
+  const timestamp = nowIso();
+  for (const session of sessions) {
+    if (session.status === 'active') {
+      session.status = 'done';
+    }
+    session.updatedAt = timestamp;
   }
   normalizeRegistry(registry);
   saveRegistry(registry);
-  return removedSessionIds;
+  return sessions;
 }
 
 export function pruneStaleSessions(): string[] {
-  const registry = loadRegistry();
-  const removedSessionIds = Object.values(registry.sessions)
-    .filter((session) => (session.kind ?? 'local-interactive') === 'local-interactive')
-    .filter((session) => !session.launcherPid || !processIsRunning(session.launcherPid))
-    .map((session) => session.sessionId);
-
-  if (removedSessionIds.length === 0) {
-    return removedSessionIds;
-  }
-
-  for (const sessionId of removedSessionIds) {
-    delete registry.sessions[sessionId];
-  }
-  normalizeRegistry(registry);
-  saveRegistry(registry);
-  return removedSessionIds;
+  // Session identity belongs to Codex, not to a launcher process. Rows remain
+  // available until the user removes them, including Desktop sessions which
+  // never have a terminal PID.
+  return [];
 }
 
 function normalizeRegistry(registry: RegistryFile): void {
   delete (registry as RegistryFile & { nextDefaultName?: number }).nextDefaultName;
 
   for (const session of Object.values(registry.sessions)) {
-    session.kind ??= 'local-interactive';
+    if ((session.kind as string | undefined) !== 'cloud-task') {
+      session.kind = 'codex-thread';
+    }
+    session.surface ??= inferSurface(session);
+    session.navigationPrecision ??= inferNavigationPrecision(session);
     session.isCustomName ??= !DEFAULT_NAME_PATTERN.test(session.displayName);
     // "waiting" was the old reprompt-oriented name for a finished local turn.
-    if (session.kind === 'local-interactive' && session.status === 'waiting') {
+    if (session.kind === 'codex-thread' && session.status === 'waiting') {
       session.status = 'done';
     }
   }
 
   const defaultSessions = Object.values(registry.sessions)
-    .filter((session) => (session.kind ?? 'local-interactive') === 'local-interactive')
+    .filter((session) => session.kind === 'codex-thread')
     .filter((session) => !session.isCustomName)
     .sort((a, b) => {
       const byCreatedAt = a.createdAt.localeCompare(b.createdAt);
@@ -245,76 +250,6 @@ function normalizeRegistry(registry: RegistryFile): void {
     session.displayName = `codex ${nextNumber}`;
     nextNumber += 1;
   }
-}
-
-function pruneStaleLocalSessions(registry: RegistryFile): void {
-  for (const session of Object.values(registry.sessions)) {
-    if ((session.kind ?? 'local-interactive') !== 'local-interactive') {
-      continue;
-    }
-    if (!session.launcherPid || !processIsRunning(session.launcherPid)) {
-      delete registry.sessions[session.sessionId];
-    }
-  }
-  pruneDuplicateLocalSessions(registry);
-  normalizeRegistry(registry);
-}
-
-function pruneDuplicateLocalSessions(registry: RegistryFile): void {
-  const duplicateGroups = new Map<string, SessionRecord[]>();
-
-  for (const session of Object.values(registry.sessions)) {
-    if ((session.kind ?? 'local-interactive') !== 'local-interactive') {
-      continue;
-    }
-
-    const keys = duplicateIdentityKeys(session);
-    for (const key of keys) {
-      const group = duplicateGroups.get(key) ?? [];
-      group.push(session);
-      duplicateGroups.set(key, group);
-    }
-  }
-
-  const removeIds = new Set<string>();
-  for (const group of duplicateGroups.values()) {
-    const unique = [...new Map(group.map((session) => [session.sessionId, session])).values()];
-    if (unique.length < 2) {
-      continue;
-    }
-    const keep = unique.sort(compareLocalSessionFreshness)[0];
-    for (const session of unique) {
-      if (session.sessionId !== keep.sessionId) {
-        removeIds.add(session.sessionId);
-      }
-    }
-  }
-
-  for (const sessionId of removeIds) {
-    delete registry.sessions[sessionId];
-  }
-}
-
-function duplicateIdentityKeys(session: SessionRecord): string[] {
-  const keys: string[] = [];
-  if (session.terminalSessionUniqueId) {
-    keys.push(`iterm-session:${session.terminalSessionUniqueId}`);
-  }
-  if (session.terminalTty) {
-    keys.push(`tty:${session.terminalTty}`);
-  }
-  if (session.launcherPid) {
-    keys.push(`pid:${session.launcherPid}`);
-  }
-  return keys;
-}
-
-function compareLocalSessionFreshness(a: SessionRecord, b: SessionRecord): number {
-  if (a.status !== b.status) {
-    return a.status === 'active' ? -1 : 1;
-  }
-  const updated = b.updatedAt.localeCompare(a.updatedAt);
-  return updated === 0 ? b.createdAt.localeCompare(a.createdAt) : updated;
 }
 
 function cloudSessionStatus(status: string): SessionRecord['status'] {
@@ -377,15 +312,35 @@ function displayNameInUse(registry: RegistryFile, displayName: string, sessionId
   });
 }
 
-function processIsRunning(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
+function statusForEvent(event: DaemonEvent, existing: SessionRecord | undefined): SessionRecord['status'] {
+  switch (event.type) {
+    case 'session-active':
+      return 'active';
+    case 'session-stop':
+    case 'session-end':
+      return existing?.status === 'failed' || existing?.status === 'interrupted' ? existing.status : 'done';
+    case 'session-interrupt':
+      return 'interrupted';
+    case 'register-session':
+      return existing?.status ?? 'done';
+    case 'session-exit':
+      return existing?.status ?? 'done';
   }
+}
 
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+function inferSurface(session: SessionRecord | undefined): SessionSurface {
+  if (!session) return 'unknown';
+  if (session.kind === 'cloud-task') return 'cloud';
+  const terminal = session.terminalApp?.toLowerCase() ?? '';
+  if (terminal.includes('vscode') || terminal.includes('visual studio code') || terminal.includes('cursor')) return 'vscode';
+  if (terminal || session.terminalSessionUniqueId || session.terminalTty || session.launcherPid) return 'cli';
+  return 'unknown';
+}
+
+function inferNavigationPrecision(session: SessionRecord | undefined): NavigationPrecision {
+  if (!session) return 'application-only';
+  if (session.surface === 'desktop') return 'exact-thread';
+  if (session.cloudTask?.url) return 'exact-thread';
+  if (session.terminalSessionUniqueId || session.terminalTty || session.terminalWindowId) return 'exact-window';
+  return 'application-only';
 }

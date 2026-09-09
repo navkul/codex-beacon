@@ -15,6 +15,7 @@ enum SessionStatus: String, Decodable {
     case waiting
     case done
     case failed
+    case interrupted
 }
 
 struct CommandSpec: Decodable {
@@ -53,6 +54,8 @@ struct OverlayEvent: Decodable {
     let displayName: String?
     let summary: String?
     let kind: String?
+    let surface: String?
+    let navigationPrecision: String?
     let sourceLabel: String?
     let status: SessionStatus?
     let cloudStatus: String?
@@ -70,6 +73,8 @@ struct OverlayItem {
     let displayName: String
     let summary: String
     let kind: String
+    let surface: String
+    let navigationPrecision: String
     let sourceLabel: String?
     let status: SessionStatus
     let cloudStatus: String?
@@ -539,7 +544,7 @@ final class OverlayRowView: NSView {
         let sourceIcon = NSImageView()
         sourceIcon.translatesAutoresizingMaskIntoConstraints = false
         sourceIcon.image = NSImage(
-            systemSymbolName: item.kind == "cloud-task" ? "cloud" : "terminal",
+            systemSymbolName: sourceIconName(item),
             accessibilityDescription: item.sourceLabel ?? "Local"
         )?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
         sourceIcon.contentTintColor = item.kind == "cloud-task"
@@ -580,9 +585,7 @@ final class OverlayRowView: NSView {
         titleRow.translatesAutoresizingMaskIntoConstraints = false
         titleRow.setContentCompressionResistancePriority(.required, for: .vertical)
         titleRow.setContentHuggingPriority(.required, for: .vertical)
-        if item.kind == "cloud-task" {
-            titleRow.addArrangedSubview(sourceIcon)
-        }
+        titleRow.addArrangedSubview(sourceIcon)
         titleRow.addArrangedSubview(title)
         titleRow.addArrangedSubview(dot)
 
@@ -747,6 +750,21 @@ final class OverlayRowView: NSView {
             return NSColor(calibratedRed: 0.53, green: 0.74, blue: 0.98, alpha: 0.95)
         case .ready:
             return NSColor(calibratedWhite: 0.72, alpha: 0.95)
+        }
+    }
+
+    private func sourceIconName(_ item: OverlayItem) -> String {
+        switch item.surface {
+        case "desktop":
+            return "macwindow"
+        case "vscode":
+            return "chevron.left.forwardslash.chevron.right"
+        case "cloud":
+            return "cloud"
+        case "cli":
+            return "terminal"
+        default:
+            return item.kind == "cloud-task" ? "cloud" : "circle.dashed"
         }
     }
 
@@ -1048,7 +1066,9 @@ final class OverlayApp: NSObject, NSApplicationDelegate {
                 sessionId: event.sessionId,
                 displayName: event.displayName ?? "Codex",
                 summary: event.summary ?? "Finished. Open the session when you are ready to continue.",
-                kind: event.kind ?? "local-interactive",
+                kind: event.kind ?? "codex-thread",
+                surface: event.surface ?? "unknown",
+                navigationPrecision: event.navigationPrecision ?? "application-only",
                 sourceLabel: event.sourceLabel,
                 status: event.status ?? .done,
                 cloudStatus: event.cloudStatus,
